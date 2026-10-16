@@ -1,0 +1,36 @@
+{
+  "name": "agent-browser-bridge",
+  "version": "2.0.0",
+  "description": "Live multi-tab, multi-profile Chrome DevTools MCP bridge for AI agents (Antigravity, Claude, Cursor, Windsurf)",
+  "author": "thisisdarkstar",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "agent-browser-bridge": "bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "chrome-extension",
+    "browser-control",
+    "devtools",
+    "antigravity",
+    "claude",
+    "cursor"
+  ],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  }
+}

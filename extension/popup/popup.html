@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Bridge MCP</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <div class="ring-glow"></div>
+          <div class="dot-core"></div>
+        </div>
+        <div class="brand-text">
+          <div class="title-row">
+            <h1>Agent Bridge</h1>
+            <span class="version-tag">MCP v2.0</span>
+          </div>
+          <span class="brand-sub" id="detectedProfileHeader">Google Chrome</span>
+        </div>
+      </div>
+      <div id="statusBadge" class="status-pill disconnected" title="Connection status with local MCP server">
+        <span class="status-dot"></span>
+        <span id="statusText">Disconnected</span>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs" role="tablist">
+      <button class="nav-tab active" data-tab="control" role="tab" id="tabBtnControl">
+        <span class="tab-icon">🎛️</span>
+        <span class="tab-label">Control</span>
+      </button>
+      <button class="nav-tab" data-tab="tabs" role="tab" id="tabBtnTabs">
+        <span class="tab-icon">📑</span>
+        <span class="tab-label">Tabs</span>
+        <span class="tab-badge" id="tabCountBadge">0</span>
+      </button>
+      <button class="nav-tab" data-tab="activity" role="tab" id="tabBtnActivity">
+        <span class="tab-icon">⚡</span>
+        <span class="tab-label">Activity</span>
+        <span class="tab-badge live-dot" id="activityCountBadge">0</span>
+      </button>
+      <button class="nav-tab" data-tab="setup" role="tab" id="tabBtnSetup">
+        <span class="tab-icon">📋</span>
+        <span class="tab-label">Setup</span>
+      </button>
+      <button class="nav-tab" data-tab="doctor" role="tab" id="tabBtnDoctor">
+        <span class="tab-icon">🩺</span>
+        <span class="tab-label">Doctor</span>
+      </button>
+    </nav>
+
+    <!-- Main Content Panels -->
+    <main class="panels-container">
+      <!-- 1. Control Panel -->
+      <section class="tab-panel active" id="panelControl">
+        <!-- Master Killswitch Toggle Card -->
+        <div class="card toggle-card">
+          <div class="toggle-content">
+            <div class="toggle-title-row">
+              <span class="card-title">Agent Control Bridge</span>
+              <span class="secure-badge" id="privacyBadge">Active</span>
+            </div>
+            <p class="card-desc" id="toggleDescription">
+              Allows AI agents (Antigravity, Claude, Cursor) to automate this browser.
+            </p>
+          </div>
+          <label class="switch" title="Toggle agent access">
+            <input type="checkbox" id="agentControlToggle" checked>
+            <span class="slider round"></span>
+          </label>
+        </div>
+
+        <!-- Profile & Port Settings -->
+        <div class="card form-card">
+          <div class="input-field">
+            <div class="field-header">
+              <label for="profileNameInput">Profile Identity</label>
+              <span class="field-hint">Target name for multi-profile routing</span>
+            </div>
+            <input type="text" id="profileNameInput" placeholder="e.g. Work, Personal, Dev Profile" autocomplete="off" spellcheck="false">
+          </div>
+
+          <div class="fields-row">
+            <div class="input-field flex-1">
+              <label for="wsPortInput">MCP Port</label>
+              <input type="number" id="wsPortInput" value="18922" min="1024" max="65535">
+            </div>
+            <div class="input-field flex-1">
+              <label>Browser Core</label>
+              <div id="browserTypeDisplay" class="value-chip">Detecting...</div>
+            </div>
+          </div>
+
+          <button id="saveConfigBtn" class="btn btn-primary">
+            <span class="btn-icon">💾</span>
+            <span>Save & Connect</span>
+          </button>
+        </div>
+
+        <!-- Live Metrics Grid -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <span class="metric-val" id="openTabsCount">0</span>
+            <span class="metric-label">Open Tabs</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-val" id="cdpSessionsCount">0</span>
+            <span class="metric-label">CDP Sessions</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-val" id="totalActionsCount">0</span>
+            <span class="metric-label">Agent Actions</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Tabs Manager Panel -->
+      <section class="tab-panel" id="panelTabs">
+        <div class="panel-header-row">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="tabSearchInput" placeholder="Filter tabs by title or URL..." autocomplete="off">
+          </div>
+          <button id="newTabBtn" class="btn-icon-square" title="Open new tab">➕</button>
+        </div>
+
+        <div class="tabs-scroll-list" id="tabsListContainer">
+          <div class="loading-state">Loading open tabs...</div>
+        </div>
+      </section>
+
+      <!-- 3. Live Agent Activity Feed -->
+      <section class="tab-panel" id="panelActivity">
+        <div class="panel-header-row">
+          <span class="section-heading">Recent Agent Actions</span>
+          <button id="clearActivityBtn" class="btn-text-sm">Clear</button>
+        </div>
+
+        <div class="activity-feed" id="activityFeedContainer">
+          <div class="empty-feed">
+            <div class="empty-icon">🤖</div>
+            <p>No agent actions recorded yet.</p>
+            <span>When Antigravity or another agent interacts with tabs, clicks buttons, or reads DOM, live records will appear here.</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. Setup & MCP Configs Panel -->
+      <section class="tab-panel" id="panelSetup">
+        <div class="setup-intro">
+          <p>Add this server to your agent configuration:</p>
+        </div>
+
+        <!-- Agent Platform Pills -->
+        <div class="agent-pills" role="radiogroup">
+          <button class="agent-pill active" data-agent="antigravity">Antigravity</button>
+          <button class="agent-pill" data-agent="claude">Claude</button>
+          <button class="agent-pill" data-agent="cursor">Cursor</button>
+          <button class="agent-pill" data-agent="windsurf">Windsurf</button>
+          <button class="agent-pill" data-agent="http">cURL / HTTP</button>
+        </div>
+
+        <!-- Distribution Mode Switch -->
+        <div class="mode-switch-row">
+          <span class="mode-label">Package Mode:</span>
+          <div class="mode-toggle-group">
+            <button class="mode-btn active" id="modeNpxBtn" title="Recommended for Chrome Web Store users">Universal (npx)</button>
+            <button class="mode-btn" id="modeLocalBtn" title="For local development repository">Local Path</button>
+          </div>
+        </div>
+
+        <!-- Code Snippet Display -->
+        <div class="code-card">
+          <div class="code-header">
+            <span class="code-filename" id="configFilename">mcp_config.json</span>
+            <button id="copyMcpConfigBtn" class="btn-copy">
+              <span id="copyIcon">📋</span>
+              <span id="copyBtnText">Copy Config</span>
+            </button>
+          </div>
+          <pre class="code-block"><code id="mcpConfigCodeBlock">Loading snippet...</code></pre>
+        </div>
+
+        <p class="config-help-text" id="configHelpText">
+          Paste this snippet into your Antigravity MCP settings.
+        </p>
+      </section>
+
+      <!-- 5. Doctor / Diagnostics Panel -->
+      <section class="tab-panel" id="panelDoctor">
+        <div class="doctor-card">
+          <div class="doctor-header">
+            <div>
+              <span class="card-title">Connection Diagnostics</span>
+              <p class="card-desc">Inspect local bridge status, latency, and active listeners.</p>
+            </div>
+            <button id="runDiagnosticsBtn" class="btn btn-secondary btn-sm">
+              <span>🩺 Run Test</span>
+            </button>
+          </div>
+
+          <div class="diagnostics-results" id="diagnosticsResults">
+            <div class="diag-row">
+              <span class="diag-label">WebSocket Client:</span>
+              <span class="diag-val" id="diagWsStatus">Checking...</span>
+            </div>
+            <div class="diag-row">
+              <span class="diag-label">HTTP RPC Health:</span>
+              <span class="diag-val" id="diagHttpHealth">Not tested</span>
+            </div>
+            <div class="diag-row">
+              <span class="diag-label">Roundtrip Latency:</span>
+              <span class="diag-val" id="diagLatency">—</span>
+            </div>
+            <div class="diag-row">
+              <span class="diag-label">Master Process PID:</span>
+              <span class="diag-val" id="diagPid">—</span>
+            </div>
+            <div class="diag-row">
+              <span class="diag-label">Connected Profiles:</span>
+              <span class="diag-val" id="diagProfiles">—</span>
+            </div>
+          </div>
+
+          <div class="doctor-actions">
+            <button id="forceReconnectBtn" class="btn btn-secondary">
+              <span>🔄 Force Reconnect</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Global Toast Notification -->
+    <div id="notification" class="notification hidden" role="status" aria-live="polite"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
