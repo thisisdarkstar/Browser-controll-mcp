@@ -41,38 +41,55 @@ This skill guides agents in controlling the user's real, active browser profile 
 
 ---
 
-## 🧰 Core Tool Reference (34 Tools)
+## 🧰 Core Tool Reference (48 Tools)
 
-### 1. Tab & Profile Management
+### 1. Tab, Profile & Navigation Management
 * **`browser_list_profiles`**: List all connected browser profiles, their IDs, names, and active status.
 * **`browser_list_tabs`**: List all open tabs across windows (`id`, `title`, `url`, `active`, `windowId`, `debuggerAttached`).
 * **`browser_switch_tab`**: Focus a tab by `tabId` and bring its browser window to the foreground.
 * **`browser_new_tab`**: Open a new tab with an optional `url`.
 * **`browser_close_tab`**: Close a tab by `tabId`.
-* **`browser_navigate`**: Navigate an existing tab to a `url` or open a new one.
+* **`browser_navigate`**: Navigate an existing tab to a `url` or open a new one with optional `waitFor: "load" | "domcontentloaded" | "none"` and `timeoutMs`.
+* **`browser_go_back`**: Navigate back in browser history.
+* **`browser_go_forward`**: Navigate forward in browser history.
+* **`browser_scroll`**: Scroll page or specific scrollable container by direction (`up`, `down`, `top`, `bottom`, `left`, `right`), `distance` (px), or scroll an element into view (`target`).
+* **`browser_manage_tab_group`**: Group agent-opened tabs into named and colored tab groups (`group`, `ungroup`, `collapse`, `expand`).
 * **`browser_reload`**: Reload a tab with optional `ignoreCache: true`.
 * **`browser_read_all_tabs`**: Extract readable text and metadata from all open tabs in a single call.
 
 ### 2. Snapshots & Precision Element Interaction
-* **`browser_get_interactive_snapshot`**: Maps all interactive elements on the page and assigns deterministic `data-agent-ref` IDs (`ref_1`, `ref_2`...) with coordinates, bounding boxes, tags, text, and roles.
+* **`browser_get_interactive_snapshot`**: Maps all interactive elements on the page (including Web Components & open Shadow DOM), returning `data-agent-ref` IDs (`ref_1`, `ref_2`...) with coordinates, bounding boxes, tags, text, form context (`formId`), and optional `viewportOnly: true` filtering to save LLM tokens.
 * **`browser_take_snapshot`**: Accessibility (a11y) tree snapshot matching standard CDP.
-* **`browser_act_on_ref`**: Dispatches `click` or `type` on a `data-agent-ref`. Renders a glowing cyan action ring on the user's screen confirming the exact target.
-* **`browser_click`**: Hardware-level click by `selectorOrRef` or `(x, y)` coordinates, supporting `button: 'left' | 'right' | 'middle'` and `clickCount`.
-* **`browser_fill`**: Clears and fills an input or textarea with `value`.
+* **`browser_get_css_styles`**: Inspect computed CSS styling for any ref or selector.
+* **`browser_act_on_ref`**: Dispatches `click` or `type` on a `data-agent-ref`. Renders a live virtual cyan cursor, action tooltip pill (`🤖`), expanding shockwave ripple, and glowing cyan bounding box on the user's screen.
+* **`browser_click`**: Hardware-level click by `selectorOrRef` or `(x, y)` coordinates, supporting `button: 'left' | 'right' | 'middle'` and `clickCount` with live cursor and shockwave ripple visual cues.
+* **`browser_fill`**: Clears and fills an input or textarea with `value` with live typing HUD tooltip.
 * **`browser_fill_form`**: Fills multiple form fields in one call using a `{ selector_or_ref: value }` map.
-* **`browser_hover`**: Dispatches mouse hover over an element or coordinates to trigger dropdowns/tooltips.
-* **`browser_drag`**: Drag-and-drop from source to destination.
+* **`browser_hover`**: Dispatches mouse hover over an element or coordinates to trigger dropdowns/tooltips with smooth virtual cursor movement.
+* **`browser_drag`**: Drag-and-drop from source to destination with smooth animated cursor trajectory.
 * **`browser_press_key`**: Dispatches keyboard keys (`Enter`, `Tab`, `Escape`, `Backspace`, `ArrowDown`, etc.).
 * **`browser_type_text`**: Types text into currently focused element or specified selector/ref.
+* **`browser_upload_file`**: Uploads local files to file input elements.
 * **`browser_wait_for`**: Waits for specific text or CSS selector to appear with `timeoutMs`.
 * **`browser_handle_dialog`**: Accepts or dismisses JavaScript `alert()`, `confirm()`, `prompt()`, or `beforeunload` dialogs.
 
-### 3. Execution & Escape Hatches (Most Versatile)
+### 3. Human-in-the-Loop & System Controls
+* **`browser_request_human_takeover`**: Displays an interactive top banner asking the user to solve a CAPTCHA, 2FA prompt, or manual confirmation, pausing the agent until the user clicks "Resume Agent ➔".
+* **`browser_clipboard`**: Read or copy text directly to/from the system clipboard without requiring manual element focus.
+* **`browser_wait_for_download`**: Tracks active downloads triggered by clicking "Export CSV" or "Download", returning the saved file path, size, and status.
+* **`browser_list_downloads`**: Lists recent browser profile downloads with metadata.
+
+### 4. Visuals, Screenshots & PDF Printing
+* **`browser_screenshot`**: High-resolution screenshot supporting visible viewport, full scrollable page (`fullPage: true`), or clipped to a specific element (`target: "ref_5"`), with format options (`png` or compressed `jpeg` with `quality`).
+* **`browser_print_to_pdf`**: Direct PDF generation via CDP `Page.printToPDF` with custom paper size, margins, and orientation.
+* **`browser_resize_page`**: Resizes viewport dimensions.
+* **`browser_emulate`**: Emulates dark/light color scheme, CPU throttling, network throttling (Offline, 3G, 4G), geolocation, or User-Agent.
+
+### 5. Execution & Escape Hatches (Most Versatile)
 * **`browser_eval_js`**: **Primary workhorse for rich DOM extraction**. Evaluates arbitrary JavaScript inside the tab context with `awaitPromise: true` and `returnByValue: true`.
-  * *Example*: Extract Slack channel messages, scrape dashboard cards, check unread indicators, or trigger SPA client-side actions.
 * **`browser_raw_cdp`**: Absolute escape hatch to run any Chrome DevTools Protocol method (e.g. `DOM.getOuterHTML`, `Fetch.enable`, `Storage.getStorageKey`).
 
-### 4. Network, Storage, Cookies & Telemetry
+### 6. Network, Storage, Cookies & Telemetry
 * **`browser_list_network_requests`**: List captured network requests for a tab (`requestId`, `url`, `method`, `status`, `mimeType`, `timestamp`).
 * **`browser_get_network_request`**: Full request/response headers and timing for a `requestId`.
 * **`browser_get_network_body`**: Fetches raw response body (JSON, text) for an API request.
@@ -80,12 +97,8 @@ This skill guides agents in controlling the user's real, active browser profile 
 * **`browser_storage`**: Read, write, or clear `localStorage` / `sessionStorage`.
 * **`browser_list_console_messages`**: Captures logs, warnings, errors, and uncaught exceptions with full stack traces.
 * **`browser_get_telemetry`**: Combined telemetry snapshot (console logs, network requests, dialog events).
-
-### 5. Visuals & Performance
-* **`browser_screenshot`**: Captures high-res PNG screenshot of the tab.
-* **`browser_resize_page`**: Resizes viewport dimensions.
-* **`browser_emulate`**: Emulates dark/light color scheme, CPU throttling, network throttling (Offline, 3G, 4G), geolocation, or User-Agent.
 * **`browser_take_heapsnapshot`**: V8 heap snapshot for debugging memory leaks.
+* **`browser_performance_trace`**: Start or stop Chrome performance timeline trace.
 * **`browser_performance_analyze_insight`**: Analyzes Core Web Vitals (TTFB, FCP, DOMContentLoaded, LoadTime).
 
 ---

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Agent Bridge MCP",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Multi-profile browser control, deterministic DOM ref targeting, and CDP debugging bridge for Antigravity & MCP agents.",
   "permissions": [
     "tabs",
@@ -10,7 +10,10 @@
     "activeTab",
     "storage",
     "cookies",
-    "alarms"
+    "alarms",
+    "downloads",
+    "tabGroups",
+    "webNavigation"
   ],
   "host_permissions": [
     "<all_urls>"

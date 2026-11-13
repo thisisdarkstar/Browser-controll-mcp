@@ -20,9 +20,31 @@ const profileNameInput = document.getElementById("profileNameInput");
 const wsPortInput = document.getElementById("wsPortInput");
 const browserTypeDisplay = document.getElementById("browserTypeDisplay");
 const saveConfigBtn = document.getElementById("saveConfigBtn");
+const saveBtnLabel = document.getElementById("saveBtnLabel");
 const openTabsCount = document.getElementById("openTabsCount");
 const cdpSessionsCount = document.getElementById("cdpSessionsCount");
 const totalActionsCount = document.getElementById("totalActionsCount");
+
+// Active Tab Context Elements
+const activeTabCard = document.getElementById("activeTabCard");
+const activeTabIdPill = document.getElementById("activeTabIdPill");
+const activeTabFavicon = document.getElementById("activeTabFavicon");
+const activeTabTitle = document.getElementById("activeTabTitle");
+const activeTabUrl = document.getElementById("activeTabUrl");
+const testOverlayBtn = document.getElementById("testOverlayBtn");
+const copyTabIdBtn = document.getElementById("copyTabIdBtn");
+
+// Interactive Metric Buttons
+const metricTabsBtn = document.getElementById("metricTabsBtn");
+const metricActionsBtn = document.getElementById("metricActionsBtn");
+
+const FALLBACK_FAVICON = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2364748b'><circle cx='12' cy='12' r='10'/></svg>";
+
+if (activeTabFavicon) {
+  activeTabFavicon.addEventListener("error", () => {
+    activeTabFavicon.style.display = "none";
+  });
+}
 
 // Tabs Manager Elements
 const tabSearchInput = document.getElementById("tabSearchInput");
@@ -119,9 +141,17 @@ function updateUI(status) {
     privacyBadge.style.borderColor = "rgba(245, 158, 11, 0.4)";
     privacyBadge.textContent = "Paused";
     toggleDescription.textContent = "Agent control is paused for user privacy.";
+  } else if (status.isBusy) {
+    statusBadge.className = "status-pill active";
+    statusText.textContent = "⚡ Agent Working";
+    privacyBadge.className = "secure-badge";
+    privacyBadge.style.color = "#00e5ff";
+    privacyBadge.style.borderColor = "rgba(0, 229, 255, 0.4)";
+    privacyBadge.textContent = "Working";
+    toggleDescription.textContent = `Executing "${status.currentAction || "action"}" on browser tabs...`;
   } else if (status.connected) {
     statusBadge.className = "status-pill connected";
-    statusText.textContent = "Connected";
+    statusText.textContent = "Ready";
     privacyBadge.className = "secure-badge";
     privacyBadge.style.color = "#34d399";
     privacyBadge.style.borderColor = "rgba(16, 185, 129, 0.4)";
@@ -137,12 +167,37 @@ function updateUI(status) {
     toggleDescription.textContent = `Waiting for MCP server on http://127.0.0.1:${status.wsPort}`;
   }
 
-  // Profile Header & Inputs
+  // Profile Header: avoid duplicate browser names
   if (status.profileName) {
-    detectedProfileHeader.textContent = `${status.profileName} (${status.browser || "Chromium"})`;
+    let cleanName = status.profileName.trim();
+    // Strip redundant trailing parenthesized browser name if already repeated
+    cleanName = cleanName.replace(/\s*\((Google Chrome|Chromium|Microsoft Edge|Brave)\)$/i, "").trim();
+    detectedProfileHeader.textContent = cleanName;
+
     if (document.activeElement !== profileNameInput && profileNameInput.value === "") {
-      profileNameInput.value = status.profileName;
+      profileNameInput.value = cleanName;
     }
+  }
+
+  // Active Tab Card Context
+  if (status.activeTab) {
+    currentActiveTabId = status.activeTab.id;
+    activeTabIdPill.textContent = `Tab #${status.activeTab.id}`;
+    activeTabTitle.textContent = status.activeTab.title || "Untitled Tab";
+    activeTabUrl.textContent = status.activeTab.url || "about:blank";
+
+    if (status.activeTab.favIconUrl) {
+      activeTabFavicon.src = status.activeTab.favIconUrl;
+      activeTabFavicon.style.display = "block";
+    } else {
+      activeTabFavicon.style.display = "none";
+    }
+  } else {
+    currentActiveTabId = null;
+    activeTabIdPill.textContent = "Tab #—";
+    activeTabTitle.textContent = "No active tab";
+    activeTabUrl.textContent = "about:blank";
+    activeTabFavicon.style.display = "none";
   }
 
   if (document.activeElement !== wsPortInput && (wsPortInput.value === "" || wsPortInput.value === "18922")) {
@@ -174,6 +229,54 @@ function refreshStatus() {
   });
 }
 
+// Active Tab Actions
+if (copyTabIdBtn) {
+  copyTabIdBtn.addEventListener("click", () => {
+    if (currentActiveTabId) {
+      navigator.clipboard.writeText(String(currentActiveTabId)).then(() => {
+        showToast(`Copied Tab ID #${currentActiveTabId} 📋`);
+      });
+    }
+  });
+}
+
+if (testOverlayBtn) {
+  testOverlayBtn.addEventListener("click", () => {
+    if (!currentActiveTabId) {
+      showToast("No active tab found to test.");
+      return;
+    }
+    testOverlayBtn.disabled = true;
+    showToast(`Highlighting elements on Tab #${currentActiveTabId}...`);
+
+    chrome.runtime.sendMessage({ action: "testHighlight", tabId: currentActiveTabId }, (res) => {
+      testOverlayBtn.disabled = false;
+      if (res && res.success) {
+        showToast(`🎯 Found & highlighted ${res.count} interactive elements!`);
+      } else {
+        showToast(`Test overlay failed: ${res?.error || "Unknown error"}`);
+      }
+    });
+  });
+}
+
+// Interactive Metric Button Shortcuts
+if (metricTabsBtn) {
+  metricTabsBtn.addEventListener("click", () => switchTab("tabs"));
+}
+
+if (metricActionsBtn) {
+  metricActionsBtn.addEventListener("click", () => switchTab("activity"));
+}
+
+// Config Dirty State Tracking
+function markConfigDirty() {
+  if (saveBtnLabel) saveBtnLabel.textContent = "Save Changes";
+}
+
+profileNameInput.addEventListener("input", markConfigDirty);
+wsPortInput.addEventListener("input", markConfigDirty);
+
 // Toggle master privacy switch
 agentControlToggle.addEventListener("change", () => {
   const newEnabled = agentControlToggle.checked;
@@ -202,8 +305,9 @@ saveConfigBtn.addEventListener("click", () => {
       newEnabled: agentControlToggle.checked,
     },
     () => {
-      showToast("Settings saved! Reconnecting...");
-      setTimeout(refreshStatus, 800);
+      if (saveBtnLabel) saveBtnLabel.textContent = "Saved ✓";
+      showToast("Settings saved successfully!");
+      setTimeout(refreshStatus, 600);
     }
   );
 });
@@ -255,7 +359,7 @@ function filterAndDisplayTabs() {
 
       return `
       <div class="tab-item-card ${tab.active ? "is-active" : ""}" data-tab-id="${tab.id}" data-window-id="${tab.windowId}">
-        <img class="tab-fav" src="${favSrc}" onerror="this.src='data:image/svg+xml,<svg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\' fill=\\'%2364748b\\'><circle cx=\\'12\\' cy=\\'12\\' r=\\'10\\'/></svg>'">
+        <img class="tab-fav" src="${favSrc}">
         <div class="tab-details">
           <div class="tab-title" title="${tab.title || "Untitled"}">${escapeHtml(tab.title || "Untitled")}</div>
           <div class="tab-url" title="${tab.url}">${escapeHtml(hostname)}</div>
@@ -269,6 +373,13 @@ function filterAndDisplayTabs() {
     `;
     })
     .join("");
+
+  // Safely attach fallback listeners for broken favicons without violating CSP
+  tabsListContainer.querySelectorAll(".tab-fav").forEach((img) => {
+    img.addEventListener("error", () => {
+      img.src = FALLBACK_FAVICON;
+    }, { once: true });
+  });
 
   // Attach click listeners to cards & close buttons
   tabsListContainer.querySelectorAll(".tab-item-card").forEach((card) => {

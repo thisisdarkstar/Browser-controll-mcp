@@ -16,10 +16,10 @@
 | **Multi-Profile Awareness** | ❌ Single browser instance only | ✅ **Yes!** Connects multiple profiles concurrently (Work, Personal) with dynamic routing |
 | **Zero Installation Needed** | ❌ Requires local clones / setup | ✅ **Yes!** Run anywhere via `npx -y agent-browser-bridge` |
 | **Deterministic `ref` Targeting** | ❌ Vision coordinate guessing or basic a11y | ✅ **Yes!** Assigns `data-agent-ref` IDs (`ref_1`, `ref_2`...) with visual highlight ring |
-| **Visual Action Ring** | ❌ Invisible | ✅ **Yes!** Shows a glowing cyan action overlay on the page during clicks & typing |
+| **Virtual Agent Cursor & Live HUD** | ❌ Invisible headless actions | ✅ **Yes!** Live cyan cursor gliding across elements, floating action tooltip (`🤖`), shockwave click ripples, scroll banners, & bounding box overlays |
 | **All-Tab Visibility** | ❌ One tab at a time | ✅ **Yes!** `browser_read_all_tabs` reads text across all open tabs simultaneously |
 | **Killswitch Privacy Toggle** | ❌ None | ✅ **Yes!** Instant "Allow Agent Control" switch in the extension popup |
-| **Full CDP Coverage** | ⚠️ 30 tools | ✅ **39 tools** (includes all DevTools tools + cookies + storage + multi-profile + heap profiler) |
+| **Full CDP Coverage** | ⚠️ 30 tools | ✅ **48 tools** (DevTools tools + scrolling + PDF + downloads + tab groups + clipboard + takeover banner) |
 
 ---
 
@@ -69,7 +69,7 @@ Add a new MCP server in Settings:
 
 ---
 
-## 🛠️ Complete Tool Catalog (39 Tools)
+## 🛠️ Complete Tool Catalog (48 Tools)
 
 ### 1. Multi-Profile & Tab Management
 - `browser_list_profiles`: List all connected browser profiles (e.g. Work, Personal), IDs, and active status.
@@ -77,12 +77,16 @@ Add a new MCP server in Settings:
 - `browser_switch_tab`: Focus a tab and bring its browser window to the foreground.
 - `browser_new_tab`: Open a new tab with an optional URL.
 - `browser_close_tab`: Close a tab by tabId.
-- `browser_navigate`: Navigate an existing tab or open a new URL.
+- `browser_navigate`: Navigate an existing tab or open a new URL with navigation lifecycle waiting (`load`, `domcontentloaded`, `none`).
+- `browser_go_back`: Navigate back in history.
+- `browser_go_forward`: Navigate forward in history.
+- `browser_scroll`: Scroll page or scrollable containers (`up`, `down`, `top`, `bottom`, `left`, `right`, distance, or scroll element into view).
+- `browser_manage_tab_group`: Organize, group, ungroup, collapse, or expand browser tabs with titles and colors.
 - `browser_reload`: Reload tab with optional cache bypass.
 - `browser_read_all_tabs`: Extract text and metadata from all open tabs in one shot.
 
 ### 2. Snapshots, DOM & CSS Styling
-- `browser_get_interactive_snapshot`: Map interactive elements with `data-agent-ref` IDs (`ref_1`, `ref_2`...), coordinates, tag, text, and roles.
+- `browser_get_interactive_snapshot`: Map interactive elements with `data-agent-ref` IDs (`ref_1`, `ref_2`...) with Shadow DOM traversal, form context (`formId`), and `viewportOnly` filtering.
 - `browser_take_snapshot`: Accessibility (a11y) tree snapshot matching `chrome-devtools-mcp`.
 - `browser_get_css_styles`: Inspect computed CSS styles (display, color, font, box-shadow, z-index, etc.) for any element by ref or selector.
 - `browser_wait_for`: Wait for specific text or CSS selector to appear on the page with a timeout.
@@ -99,11 +103,17 @@ Add a new MCP server in Settings:
 - `browser_upload_file`: Upload local file(s) into file input elements (`DOM.setFileInputFiles`).
 - `browser_handle_dialog`: Accept or dismiss JavaScript `alert()`, `confirm()`, `prompt()`, or `beforeunload` dialogs.
 
-### 4. Device & Network Emulation
+### 4. Human-in-the-Loop & System Controls
+- `browser_request_human_takeover`: Display an interactive banner requesting user takeover (2FA, CAPTCHA, payment confirmation) and pause until resumed.
+- `browser_clipboard`: Read or copy text directly to/from the system clipboard in the tab context.
+- `browser_wait_for_download`: Track active downloads triggered by clicking "Export" or "Download", returning the saved file path, size, and status.
+- `browser_list_downloads`: List recent downloads in the browser profile.
+
+### 5. Device & Network Emulation
 - `browser_resize_page`: Emulate viewport dimensions (width, height, deviceScaleFactor, mobile).
 - `browser_emulate`: Emulate dark/light color scheme, CPU throttling (1x-20x), network throttling (Offline, Slow 3G, Fast 3G, 4G), Geolocation (`lat,lng`), or User Agent.
 
-### 5. Network, Cookies & Local Storage
+### 6. Network, Cookies & Local Storage
 - `browser_list_network_requests`: List recorded network requests for a tab (status, method, url, resourceType, mimeType, timestamp).
 - `browser_get_network_request`: Get full details and headers for a specific requestId.
 - `browser_get_network_body`: Fetch raw response body for any recorded network request.
@@ -112,17 +122,18 @@ Add a new MCP server in Settings:
 - `browser_clear_cookies`: Clear all cookies for the profile.
 - `browser_storage`: Read, write, or clear `localStorage` / `sessionStorage`.
 
-### 6. Console, Telemetry & Diagnostics
+### 7. Console, Telemetry & Diagnostics
 - `browser_list_console_messages`: List captured console logs, warnings, errors, and uncaught exceptions with stack traces.
 - `browser_get_telemetry`: Combined telemetry snapshot (console logs, network requests, dialog events).
 
-### 7. Performance & Screenshots
-- `browser_screenshot`: Capture high-resolution PNG tab screenshot.
+### 8. Visuals, Screenshots & PDF Printing
+- `browser_screenshot`: Capture high-resolution PNG or compressed JPEG screenshot, full-page, or clipped to an element ref/selector.
+- `browser_print_to_pdf`: Generate a PDF of the current webpage via Chrome DevTools `Page.printToPDF`.
 - `browser_take_heapsnapshot`: Capture V8 heap snapshot for memory leak analysis.
 - `browser_performance_trace`: Start or stop Chrome performance timeline trace.
 - `browser_performance_analyze_insight`: Extract Core Web Vitals (TTFB, FCP, DOMContentLoaded, LoadTime).
 
-### 8. JavaScript Execution & Raw CDP Escape Hatch
+### 9. JavaScript Execution & Raw CDP Escape Hatch
 - `browser_eval_js`: Evaluate arbitrary JavaScript in the tab context with async/await and return serialized values.
 - `browser_raw_cdp`: Absolute escape hatch: execute ANY Chrome DevTools Protocol command with custom parameters.
 

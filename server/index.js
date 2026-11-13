@@ -362,7 +362,7 @@ function jsonResult(data) {
 // 2. Initialize MCP Server
 const server = new McpServer({
   name: "custom-browser-bridge",
-  version: "2.0.0",
+  version: "2.1.0",
 });
 
 // ---------------------------------------------------------------------------
@@ -452,15 +452,77 @@ server.registerTool(
 server.registerTool(
   "browser_navigate",
   {
-    description: "Open a new tab or navigate an existing tabId to a specified URL.",
+    description: "Open a new tab or navigate an existing tabId to a specified URL with optional navigation completion waiting.",
     inputSchema: {
       url: z.string().describe("The URL to open or navigate to"),
       tabId: z.number().optional().describe("Omit to open a new tab, or provide tabId to navigate existing tab"),
       active: z.boolean().optional().describe("Whether to make the tab active (default true)"),
+      waitFor: z.enum(["load", "domcontentloaded", "none"]).optional().describe("Wait condition after navigating (default 'load')"),
+      timeoutMs: z.number().optional().describe("Timeout for navigation wait in milliseconds (default 15000)"),
       profile: z.string().optional().describe("Optional profile name or ID"),
     },
   },
-  async ({ url, tabId, active, profile }) => jsonResult(await callProfileExtension(profile, "navigate_or_open", { url, tabId, active }))
+  async ({ url, tabId, active, waitFor, timeoutMs, profile }) =>
+    jsonResult(await callProfileExtension(profile, "navigate_or_open", { url, tabId, active, waitFor, timeoutMs }))
+);
+
+server.registerTool(
+  "browser_go_back",
+  {
+    description: "Navigate back in browser history for a specific tab.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId to navigate back"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, profile }) => jsonResult(await callProfileExtension(profile, "go_back", { tabId }))
+);
+
+server.registerTool(
+  "browser_go_forward",
+  {
+    description: "Navigate forward in browser history for a specific tab.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId to navigate forward"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, profile }) => jsonResult(await callProfileExtension(profile, "go_forward", { tabId }))
+);
+
+server.registerTool(
+  "browser_scroll",
+  {
+    description: "Scroll page or specific scrollable container/element by direction, pixel distance, or target ref/selector.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId to scroll"),
+      direction: z.enum(["up", "down", "top", "bottom", "left", "right"]).optional().describe("Scroll direction (default 'down')"),
+      distance: z.number().optional().describe("Scroll distance in pixels (default 500)"),
+      target: z.string().optional().describe("Optional ref (e.g. 'ref_5') or CSS selector to scroll into view or scroll inside container"),
+      smooth: z.boolean().optional().describe("Smooth scroll animation (default false for instant)"),
+      x: z.number().optional().describe("Direct absolute X scroll coordinate"),
+      y: z.number().optional().describe("Direct absolute Y scroll coordinate"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, direction, distance, target, smooth, x, y, profile }) =>
+    jsonResult(await callProfileExtension(profile, "scroll", { tabId, direction, distance, target, smooth, x, y }))
+);
+
+server.registerTool(
+  "browser_manage_tab_group",
+  {
+    description: "Organize, group, ungroup, collapse, or expand browser tabs into named colored tab groups.",
+    inputSchema: {
+      tabIds: z.array(z.number()).describe("Array of tab IDs to manage"),
+      action: z.enum(["group", "ungroup", "collapse", "expand"]).optional().describe("Group action (default 'group')"),
+      title: z.string().optional().describe("Optional title for the tab group (e.g. 'AI Agent Work')"),
+      color: z.enum(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan"]).optional().describe("Color of the tab group"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabIds, action, title, color, profile }) =>
+    jsonResult(await callProfileExtension(profile, "manage_tab_group", { tabIds, action, title, color }))
 );
 
 server.registerTool(
@@ -494,13 +556,14 @@ server.registerTool(
 server.registerTool(
   "browser_get_interactive_snapshot",
   {
-    description: "Assigns data-agent-ref IDs (ref_1, ref_2...) to all visible interactive elements in a tab and returns a structured map of clickable buttons, inputs, links, and coordinates.",
+    description: "Assigns data-agent-ref IDs (ref_1, ref_2...) to all visible interactive elements in a tab and returns a structured map of clickable buttons, inputs, links, coordinates, and form context with Shadow DOM traversal.",
     inputSchema: {
       tabId: z.number().describe("The tabId to inspect"),
+      viewportOnly: z.boolean().optional().describe("If true, only returns interactive elements currently visible in viewport (saves tokens on long pages)"),
       profile: z.string().optional().describe("Optional profile name or ID"),
     },
   },
-  async ({ tabId, profile }) => jsonResult(await callProfileExtension(profile, "get_interactive_snapshot", { tabId }))
+  async ({ tabId, viewportOnly, profile }) => jsonResult(await callProfileExtension(profile, "get_interactive_snapshot", { tabId, viewportOnly }))
 );
 
 server.registerTool(
@@ -874,18 +937,96 @@ server.registerTool(
 server.registerTool(
   "browser_screenshot",
   {
-    description: "Capture a PNG screenshot of a specific tab.",
+    description: "Capture a PNG or JPEG screenshot of a specific tab, full-page, or clipped to an element ref/selector.",
     inputSchema: {
       tabId: z.number().describe("The tabId to screenshot"),
+      target: z.string().optional().describe("Optional element ref (e.g. 'ref_5') or CSS selector to clip screenshot to only that element"),
+      fullPage: z.boolean().optional().describe("Whether to capture full scrollable page beyond current viewport"),
+      format: z.enum(["png", "jpeg"]).optional().describe("Image format (default 'png')"),
+      quality: z.number().optional().describe("Compression quality for jpeg (0 to 100) to save token context"),
       profile: z.string().optional().describe("Optional profile name or ID"),
     },
   },
-  async ({ tabId, profile }) => {
-    const { base64Png } = await callProfileExtension(profile, "screenshot", { tabId });
+  async ({ tabId, target, fullPage, format, quality, profile }) => {
+    const res = await callProfileExtension(profile, "screenshot", { tabId, target, fullPage, format, quality });
     return {
-      content: [{ type: "image", data: base64Png, mimeType: "image/png" }],
+      content: [{ type: "image", data: res.base64Image || res.base64Png, mimeType: res.mimeType || "image/png" }],
     };
   }
+);
+
+server.registerTool(
+  "browser_print_to_pdf",
+  {
+    description: "Generate and download a PDF document of the current tab via Chrome DevTools Page.printToPDF.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId to print"),
+      landscape: z.boolean().optional().describe("Paper orientation: true for landscape, false for portrait"),
+      printBackground: z.boolean().optional().describe("Print background graphics (default true)"),
+      scale: z.number().optional().describe("Scale of the webpage rendering (default 1)"),
+      paperWidth: z.number().optional().describe("Paper width in inches (default 8.5)"),
+      paperHeight: z.number().optional().describe("Paper height in inches (default 11)"),
+      pageRanges: z.string().optional().describe("Paper ranges to print, e.g. '1-5, 8, 11-13'"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, landscape, printBackground, scale, paperWidth, paperHeight, pageRanges, profile }) =>
+    jsonResult(await callProfileExtension(profile, "print_to_pdf", { tabId, landscape, printBackground, scale, paperWidth, paperHeight, pageRanges }))
+);
+
+server.registerTool(
+  "browser_wait_for_download",
+  {
+    description: "Wait for an active or triggered file download to finish, returning filename, saved path, size, and status.",
+    inputSchema: {
+      timeoutMs: z.number().optional().describe("Timeout in ms to wait for download to finish (default 30000)"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ timeoutMs, profile }) => jsonResult(await callProfileExtension(profile, "wait_for_download", { timeoutMs }))
+);
+
+server.registerTool(
+  "browser_list_downloads",
+  {
+    description: "List recent downloads in the browser profile (file name, size, MIME type, state, URL).",
+    inputSchema: {
+      limit: z.number().optional().describe("Maximum number of recent downloads to return (default 10)"),
+      query: z.string().optional().describe("Optional search query string for filename or URL"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ limit, query, profile }) => jsonResult(await callProfileExtension(profile, "list_downloads", { limit, query }))
+);
+
+server.registerTool(
+  "browser_request_human_takeover",
+  {
+    description: "Display an interactive takeover banner at the top of the user's active tab asking them to complete 2FA, solve a CAPTCHA, or provide manual approval, and pause until the user clicks 'Resume Agent'.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId where intervention is needed"),
+      reason: z.string().describe("Clear message displayed to user explaining why agent is paused (e.g. 'Please complete SMS 2FA')"),
+      timeoutMs: z.number().optional().describe("Timeout in ms to wait for user resumption (default 120000 = 2 minutes)"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, reason, timeoutMs, profile }) =>
+    jsonResult(await callProfileExtension(profile, "request_human_takeover", { tabId, reason, timeoutMs }))
+);
+
+server.registerTool(
+  "browser_clipboard",
+  {
+    description: "Read or write to the system clipboard in the tab context without requiring manual focus.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId"),
+      operation: z.enum(["get", "set"]).describe("Operation: 'get' to read clipboard or 'set' to write text to clipboard"),
+      text: z.string().optional().describe("Text to write if operation is 'set'"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, operation, text, profile }) =>
+    jsonResult(await callProfileExtension(profile, "clipboard", { tabId, operation, text }))
 );
 
 server.registerTool(

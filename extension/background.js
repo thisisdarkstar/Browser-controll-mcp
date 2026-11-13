@@ -13,9 +13,12 @@ const tabTelemetry = new Map(); // tabId -> { console: [], network: Map(), dialo
 let activeTracingTab = null;
 let activeTraceEvents = [];
 
-// Real-time Agent Action Audit Log
+// Real-time Agent Action Audit Log & State
 const recentActions = []; // Rolling buffer of last 30 actions for UI audit log
 let totalActionCount = 0;
+let activeRpcCount = 0;
+let currentExecutingAction = null;
+let lastAgentActionTime = null;
 
 function logAgentAction(action, params, result, error) {
   totalActionCount++;
@@ -81,6 +84,13 @@ function updateBadge() {
     chrome.action.setBadgeText({ text: "PAUSE" });
     chrome.action.setBadgeBackgroundColor({ color: "#f59e0b" });
     chrome.action.setTitle({ title: `Agent Bridge: Control Disabled (${profileName})` });
+    return;
+  }
+
+  if (activeRpcCount > 0) {
+    chrome.action.setBadgeText({ text: "RUN" });
+    chrome.action.setBadgeBackgroundColor({ color: "#00e5ff" });
+    chrome.action.setTitle({ title: `Agent Bridge: Executing ${currentExecutingAction || "action"}...` });
     return;
   }
 
@@ -186,27 +196,279 @@ async function attachDebuggerIfNeeded(tabId) {
   }
 }
 
-// Element resolver helper (supports data-agent-ref OR css selector)
+// Wait for a tab to finish loading (navigation synchronization)
+function waitForTabReady(tabId, mode = "load", timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        chrome.tabs.onUpdated.removeListener(tabListener);
+        resolve({ ready: false, timedOut: true });
+      }
+    }, timeoutMs);
+
+    function tabListener(updatedId, changeInfo) {
+      if (updatedId === tabId) {
+        if (mode === "domcontentloaded" && (changeInfo.status === "loading" || changeInfo.status === "complete")) {
+          finish(true);
+        } else if (changeInfo.status === "complete") {
+          finish(true);
+        }
+      }
+    }
+
+    function finish(ok) {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(tabListener);
+        setTimeout(() => resolve({ ready: ok }), 250);
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(tabListener);
+  });
+}
+
+// Virtual Agent Cursor & Action HUD Injector
+async function injectAgentVisualCue(tabId, cue) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      args: [cue],
+      func: (data) => {
+        if (!document || !document.body) return;
+
+        let cursor = document.getElementById("__agent_virtual_cursor");
+        let label = document.getElementById("__agent_cursor_label");
+        let overlay = document.getElementById("__agent_action_overlay");
+
+        if (!cursor) {
+          cursor = document.createElement("div");
+          cursor.id = "__agent_virtual_cursor";
+          cursor.style.cssText = `
+            position: fixed;
+            z-index: 2147483647;
+            pointer-events: none;
+            width: 26px;
+            height: 26px;
+            top: 20px;
+            left: 20px;
+            transform: translate(-3px, -3px);
+            transition: left 0.22s cubic-bezier(0.2, 0, 0, 1), top 0.22s cubic-bezier(0.2, 0, 0, 1), opacity 0.35s ease;
+            filter: drop-shadow(0 3px 10px rgba(0, 229, 255, 0.75));
+            opacity: 0;
+          `;
+          cursor.innerHTML = `
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+              <path d="M4 3L19 10.5L11.5 13.5L8.5 21L4 3Z" fill="#00e5ff" stroke="#070a12" stroke-width="2" stroke-linejoin="round"/>
+              <circle cx="5.5" cy="5.5" r="1.5" fill="#ffffff"/>
+            </svg>
+            <div id="__agent_cursor_label" style="
+              position: absolute;
+              left: 22px;
+              top: 16px;
+              background: rgba(15, 23, 42, 0.94);
+              color: #f8fafc;
+              border: 1px solid rgba(0, 229, 255, 0.6);
+              border-radius: 8px;
+              padding: 4px 10px;
+              font-size: 11px;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+              font-weight: 600;
+              white-space: nowrap;
+              box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6), 0 0 10px rgba(0, 229, 255, 0.3);
+              pointer-events: none;
+              opacity: 0;
+              transform: translateY(2px);
+              transition: opacity 0.2s ease, transform 0.2s ease;
+              display: flex;
+              align-items: center;
+              gap: 6px;
+            "></div>
+          `;
+          document.body.appendChild(cursor);
+          label = document.getElementById("__agent_cursor_label");
+        }
+
+        // Position cursor
+        if (data.x !== undefined && data.y !== undefined) {
+          cursor.style.left = `${data.x}px`;
+          cursor.style.top = `${data.y}px`;
+          cursor.style.opacity = "1";
+        }
+
+        // Action Tooltip Pill
+        if (data.label && label) {
+          label.innerHTML = `<span style="font-size: 13px;">🤖</span> ${data.label}`;
+          label.style.opacity = "1";
+          label.style.transform = "translateY(0)";
+
+          clearTimeout(window.__agentLabelTimeout);
+          window.__agentLabelTimeout = setTimeout(() => {
+            if (label) {
+              label.style.opacity = "0";
+              label.style.transform = "translateY(2px)";
+            }
+          }, 2400);
+        }
+
+        // Click Ripple Shockwave
+        if (data.type === "click" && data.x !== undefined && data.y !== undefined) {
+          const ripple = document.createElement("div");
+          ripple.style.cssText = `
+            position: fixed;
+            left: ${data.x - 18}px;
+            top: ${data.y - 18}px;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: 2px solid #00e5ff;
+            background: rgba(0, 229, 255, 0.35);
+            pointer-events: none;
+            z-index: 2147483646;
+            transform: scale(0.3);
+            opacity: 1;
+            transition: transform 0.45s cubic-bezier(0.1, 0.8, 0.2, 1), opacity 0.45s ease-out;
+          `;
+          document.body.appendChild(ripple);
+          requestAnimationFrame(() => {
+            ripple.style.transform = "scale(2.6)";
+            ripple.style.opacity = "0";
+          });
+          setTimeout(() => ripple.remove(), 500);
+
+          // Cursor click bounce animation
+          cursor.style.transform = "translate(-3px, -3px) scale(0.85)";
+          setTimeout(() => {
+            cursor.style.transform = "translate(-3px, -3px) scale(1)";
+          }, 150);
+        }
+
+        // Scroll indicator banner
+        if (data.type === "scroll") {
+          let scrollBanner = document.getElementById("__agent_scroll_indicator");
+          if (!scrollBanner) {
+            scrollBanner = document.createElement("div");
+            scrollBanner.id = "__agent_scroll_indicator";
+            scrollBanner.style.cssText = `
+              position: fixed;
+              bottom: 24px;
+              right: 24px;
+              z-index: 2147483647;
+              pointer-events: none;
+              background: rgba(15, 23, 42, 0.94);
+              color: #00e5ff;
+              border: 1px solid rgba(0, 229, 255, 0.6);
+              border-radius: 8px;
+              padding: 6px 14px;
+              font-size: 12px;
+              font-family: system-ui, sans-serif;
+              font-weight: 600;
+              box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 229, 255, 0.35);
+              opacity: 0;
+              transition: opacity 0.2s ease, transform 0.2s ease;
+              transform: translateY(6px);
+            `;
+            document.body.appendChild(scrollBanner);
+          }
+          scrollBanner.innerHTML = `🤖 ${data.label}`;
+          scrollBanner.style.opacity = "1";
+          scrollBanner.style.transform = "translateY(0)";
+          clearTimeout(window.__agentScrollTimeout);
+          window.__agentScrollTimeout = setTimeout(() => {
+            if (scrollBanner) {
+              scrollBanner.style.opacity = "0";
+              scrollBanner.style.transform = "translateY(6px)";
+            }
+          }, 1800);
+        }
+
+        // Target Element Highlight Ring
+        if (data.rect) {
+          if (!overlay) {
+            overlay = document.createElement("div");
+            overlay.id = "__agent_action_overlay";
+            overlay.style.cssText = `
+              position: fixed;
+              z-index: 2147483645;
+              pointer-events: none;
+              border: 2px solid #00e5ff;
+              background: rgba(0, 229, 255, 0.14);
+              border-radius: 6px;
+              box-shadow: 0 0 16px rgba(0, 229, 255, 0.8), inset 0 0 8px rgba(0, 229, 255, 0.4);
+              transition: all 0.15s ease-out;
+            `;
+            document.body.appendChild(overlay);
+          }
+          overlay.style.left = `${data.rect.x - 4}px`;
+          overlay.style.top = `${data.rect.y - 4}px`;
+          overlay.style.width = `${data.rect.width + 8}px`;
+          overlay.style.height = `${data.rect.height + 8}px`;
+          overlay.style.opacity = "1";
+          clearTimeout(window.__agentOverlayTimeout);
+          window.__agentOverlayTimeout = setTimeout(() => {
+            if (overlay) overlay.style.opacity = "0";
+          }, 1800);
+        }
+
+        // Drag trajectory
+        if (data.type === "drag" && data.from && data.to) {
+          cursor.style.left = `${data.from.x}px`;
+          cursor.style.top = `${data.from.y}px`;
+          cursor.style.opacity = "1";
+          setTimeout(() => {
+            cursor.style.left = `${data.to.x}px`;
+            cursor.style.top = `${data.to.y}px`;
+          }, 80);
+        }
+
+        // Auto-fade cursor when idle for 5 seconds
+        clearTimeout(window.__agentCursorFadeTimeout);
+        window.__agentCursorFadeTimeout = setTimeout(() => {
+          if (cursor) cursor.style.opacity = "0";
+        }, 5000);
+      },
+    });
+  } catch {}
+}
+
+// Element resolver helper (supports data-agent-ref OR css selector with shadow DOM traversal)
 async function resolveElementInfo(tabId, selectorOrRef) {
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId },
     args: [selectorOrRef],
     func: (target) => {
+      function findInShadow(root, sel) {
+        try {
+          const direct = root.querySelector(sel);
+          if (direct) return direct;
+          const all = root.querySelectorAll("*");
+          for (const node of all) {
+            if (node.shadowRoot) {
+              const found = findInShadow(node.shadowRoot, sel);
+              if (found) return found;
+            }
+          }
+        } catch {}
+        return null;
+      }
+
       let el = null;
       if (typeof target === "string" && (target.startsWith("ref_") || target.startsWith("ref-"))) {
-        el = document.querySelector(`[data-agent-ref="${target}"]`);
+        el = findInShadow(document, `[data-agent-ref="${target}"]`);
       }
       if (!el) {
         try {
-          el = document.querySelector(target);
+          el = findInShadow(document, target);
         } catch {
-          // not a valid CSS selector, try ref lookup fallback
-          el = document.querySelector(`[data-agent-ref="${target}"]`);
+          el = findInShadow(document, `[data-agent-ref="${target}"]`);
         }
       }
       if (!el && typeof target === "string") {
         try {
-          el = document.querySelector(target.toLowerCase());
+          el = findInShadow(document, target.toLowerCase());
         } catch {}
       }
       if (!el) return null;
@@ -320,18 +582,158 @@ async function handleRpc(action, params = {}) {
     }
 
     case "navigate_or_open": {
-      if (params.tabId) {
-        await chrome.tabs.update(params.tabId, {
+      let targetTabId = params.tabId;
+      if (targetTabId) {
+        await chrome.tabs.update(targetTabId, {
           url: params.url,
           active: params.active ?? true,
         });
-        return { success: true, navigated: true, tabId: params.tabId, url: params.url };
+      } else {
+        const tab = await chrome.tabs.create({
+          url: params.url,
+          active: params.active ?? true,
+        });
+        targetTabId = tab.id;
       }
-      const tab = await chrome.tabs.create({
-        url: params.url,
-        active: params.active ?? true,
+
+      if (params.waitFor && params.waitFor !== "none") {
+        await waitForTabReady(targetTabId, params.waitFor, params.timeoutMs || 15000);
+      }
+
+      return { success: true, navigated: true, tabId: targetTabId, id: targetTabId, url: params.url };
+    }
+
+    case "go_back": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      try {
+        await chrome.tabs.goBack(params.tabId);
+      } catch {
+        await chrome.scripting.executeScript({
+          target: { tabId: params.tabId },
+          func: () => window.history.back(),
+        });
+      }
+      return { success: true, tabId: params.tabId, navigated: "back" };
+    }
+
+    case "go_forward": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      try {
+        await chrome.tabs.goForward(params.tabId);
+      } catch {
+        await chrome.scripting.executeScript({
+          target: { tabId: params.tabId },
+          func: () => window.history.forward(),
+        });
+      }
+      return { success: true, tabId: params.tabId, navigated: "forward" };
+    }
+
+    case "scroll": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: params.tabId },
+        args: [
+          params.direction || "down",
+          params.distance ?? 500,
+          params.target || null,
+          params.smooth ?? false,
+          params.x ?? null,
+          params.y ?? null,
+        ],
+        func: (direction, distance, target, smooth, directX, directY) => {
+          const behavior = smooth ? "smooth" : "instant";
+
+          if (directX !== null || directY !== null) {
+            window.scrollTo({
+              left: directX ?? window.scrollX,
+              top: directY ?? window.scrollY,
+              behavior,
+            });
+            return {
+              scrolled: true,
+              scrollX: window.scrollX,
+              scrollY: window.scrollY,
+              scrollHeight: document.body ? document.body.scrollHeight : 0,
+            };
+          }
+
+          let container = null;
+          if (target) {
+            if (target.startsWith("ref_") || target.startsWith("ref-")) {
+              container = document.querySelector(`[data-agent-ref="${target}"]`);
+            }
+            if (!container) {
+              try {
+                container = document.querySelector(target);
+              } catch {}
+            }
+          }
+
+          if (container) {
+            const overflowY = window.getComputedStyle(container).overflowY;
+            const isScrollable =
+              (overflowY === "auto" || overflowY === "scroll") && container.scrollHeight > container.clientHeight;
+
+            if (isScrollable) {
+              if (direction === "top") container.scrollTo({ top: 0, behavior });
+              else if (direction === "bottom") container.scrollTo({ top: container.scrollHeight, behavior });
+              else if (direction === "up") container.scrollBy({ top: -distance, behavior });
+              else if (direction === "down") container.scrollBy({ top: distance, behavior });
+              else if (direction === "left") container.scrollBy({ left: -distance, behavior });
+              else if (direction === "right") container.scrollBy({ left: distance, behavior });
+              return {
+                scrolled: true,
+                target,
+                scrollTop: container.scrollTop,
+                scrollLeft: container.scrollLeft,
+                scrollHeight: container.scrollHeight,
+              };
+            } else {
+              container.scrollIntoView({ behavior, block: "center", inline: "center" });
+              return {
+                scrolled: true,
+                target,
+                scrolledIntoView: true,
+                scrollX: window.scrollX,
+                scrollY: window.scrollY,
+              };
+            }
+          }
+
+          if (direction === "top") {
+            window.scrollTo({ top: 0, behavior });
+          } else if (direction === "bottom") {
+            window.scrollTo({
+              top: Math.max(document.body ? document.body.scrollHeight : 0, document.documentElement.scrollHeight),
+              behavior,
+            });
+          } else if (direction === "up") {
+            window.scrollBy({ top: -distance, behavior });
+          } else if (direction === "down") {
+            window.scrollBy({ top: distance, behavior });
+          } else if (direction === "left") {
+            window.scrollBy({ left: -distance, behavior });
+          } else if (direction === "right") {
+            window.scrollBy({ left: distance, behavior });
+          }
+
+          return {
+            scrolled: true,
+            direction,
+            distance,
+            scrollX: Math.round(window.scrollX),
+            scrollY: Math.round(window.scrollY),
+            viewportHeight: window.innerHeight,
+            pageHeight: Math.max(document.body ? document.body.scrollHeight : 0, document.documentElement.scrollHeight),
+          };
+        },
       });
-      return { success: true, navigated: true, tabId: tab.id, id: tab.id, url: params.url };
+      await injectAgentVisualCue(params.tabId, {
+        type: "scroll",
+        label: `Scroll ${params.direction || "down"} (${params.distance ?? 500}px)`,
+      });
+      return { success: true, tabId: params.tabId, ...result };
     }
 
     case "reload_tab": {
@@ -382,7 +784,8 @@ async function handleRpc(action, params = {}) {
     case "get_interactive_snapshot": {
       const [{ result }] = await chrome.scripting.executeScript({
         target: { tabId: params.tabId },
-        func: () => {
+        args: [params.viewportOnly ?? false],
+        func: (viewportOnly) => {
           const selectors = [
             "a[href]",
             "button",
@@ -401,10 +804,26 @@ async function handleRpc(action, params = {}) {
             "[onclick]",
           ].join(",");
 
-          const elements = Array.from(document.querySelectorAll(selectors));
+          function queryElementsWithShadow(root) {
+            const list = [];
+            try {
+              list.push(...root.querySelectorAll(selectors));
+              const all = root.querySelectorAll("*");
+              for (const el of all) {
+                if (el.shadowRoot) {
+                  list.push(...queryElementsWithShadow(el.shadowRoot));
+                }
+              }
+            } catch {}
+            return list;
+          }
+
+          const elements = queryElementsWithShadow(document);
           const map = [];
           const elementsObj = {};
           let refCounter = 1;
+          const vw = window.innerWidth;
+          const vh = window.innerHeight;
 
           for (const el of elements) {
             const rect = el.getBoundingClientRect();
@@ -418,8 +837,17 @@ async function handleRpc(action, params = {}) {
               continue;
             }
 
+            if (viewportOnly) {
+              if (rect.bottom < 0 || rect.top > vh || rect.right < 0 || rect.left > vw) {
+                continue;
+              }
+            }
+
             const ref = `ref_${refCounter++}`;
             el.setAttribute("data-agent-ref", ref);
+
+            const form = el.closest ? el.closest("form") : null;
+            const formId = form ? form.id || form.name || "form" : null;
 
             const item = {
               ref,
@@ -439,6 +867,7 @@ async function handleRpc(action, params = {}) {
                 .slice(0, 120),
               href: el.getAttribute("href") || null,
               disabled: el.disabled || el.getAttribute("aria-disabled") === "true",
+              formId,
               bounds: {
                 x: Math.round(rect.left + rect.width / 2),
                 y: Math.round(rect.top + rect.height / 2),
@@ -458,6 +887,7 @@ async function handleRpc(action, params = {}) {
             title: document.title,
             url: location.href,
             viewport: { width: window.innerWidth, height: window.innerHeight },
+            viewportOnly: Boolean(viewportOnly),
           };
         },
       });
@@ -591,17 +1021,30 @@ async function handleRpc(action, params = {}) {
       const target = params.ref || params.target;
       let x = params.x;
       let y = params.y;
+      let rect = null;
 
       if (target) {
         const info = await resolveElementInfo(params.tabId, target);
         if (!info) throw new Error(`Element "${target}" not found.`);
         x = info.x;
         y = info.y;
+        rect = info.rect;
       }
 
       if (x === undefined || y === undefined) {
         throw new Error("Must specify target ref/selector or exact x, y coordinates.");
       }
+
+      // Visual Agent Cursor & HUD cue
+      await injectAgentVisualCue(params.tabId, {
+        type: params.actionType === "type" ? "type" : "click",
+        x,
+        y,
+        rect,
+        label: params.actionType === "type" && params.text
+          ? `Type: "${params.text}"`
+          : (target ? `Click ${target}` : `Click (${x}, ${y})`),
+      });
 
       await attachDebuggerIfNeeded(params.tabId);
       const button = params.button || "left";
@@ -677,11 +1120,22 @@ async function handleRpc(action, params = {}) {
     case "hover": {
       let x = params.x;
       let y = params.y;
+      let rect = null;
       if (params.target) {
         const info = await resolveElementInfo(params.tabId, params.target);
         if (!info) throw new Error(`Target "${params.target}" not found.`);
         x = info.x;
         y = info.y;
+        rect = info.rect;
+      }
+      if (x !== undefined && y !== undefined) {
+        await injectAgentVisualCue(params.tabId, {
+          type: "hover",
+          x,
+          y,
+          rect,
+          label: params.target ? `Hover ${params.target}` : `Hover (${x}, ${y})`,
+        });
       }
       await attachDebuggerIfNeeded(params.tabId);
       await chrome.debugger.sendCommand({ tabId: params.tabId }, "Input.dispatchMouseEvent", {
@@ -710,6 +1164,13 @@ async function handleRpc(action, params = {}) {
         toX = toInfo.x;
         toY = toInfo.y;
       }
+
+      await injectAgentVisualCue(params.tabId, {
+        type: "drag",
+        from: { x: fromX, y: fromY },
+        to: { x: toX, y: toY },
+        label: `Drag to (${toX}, ${toY})`,
+      });
 
       await attachDebuggerIfNeeded(params.tabId);
 
@@ -752,6 +1213,14 @@ async function handleRpc(action, params = {}) {
       const target = params.target || params.ref;
       const info = await resolveElementInfo(params.tabId, target);
       if (!info) throw new Error(`Element "${target}" not found.`);
+
+      await injectAgentVisualCue(params.tabId, {
+        type: "type",
+        x: info.x,
+        y: info.y,
+        rect: info.rect,
+        label: `Fill: "${params.value || ""}"`,
+      });
 
       await attachDebuggerIfNeeded(params.tabId);
 
@@ -806,9 +1275,15 @@ async function handleRpc(action, params = {}) {
     }
 
     case "press_key": {
-      await attachDebuggerIfNeeded(params.tabId);
       const key = params.key;
       const code = params.code || (key.length === 1 ? `Key${key.toUpperCase()}` : key);
+
+      await injectAgentVisualCue(params.tabId, {
+        type: "type",
+        label: `Key: ${key}`,
+      });
+
+      await attachDebuggerIfNeeded(params.tabId);
 
       await chrome.debugger.sendCommand({ tabId: params.tabId }, "Input.dispatchKeyEvent", {
         type: "keyDown",
@@ -824,25 +1299,41 @@ async function handleRpc(action, params = {}) {
     }
 
     case "type_text": {
-      await attachDebuggerIfNeeded(params.tabId);
+      let info = null;
       if (params.target) {
-        const info = await resolveElementInfo(params.tabId, params.target);
-        if (info) {
-          await chrome.debugger.sendCommand({ tabId: params.tabId }, "Input.dispatchMouseEvent", {
-            type: "mousePressed",
-            x: info.x,
-            y: info.y,
-            button: "left",
-            clickCount: 1,
-          });
-          await chrome.debugger.sendCommand({ tabId: params.tabId }, "Input.dispatchMouseEvent", {
-            type: "mouseReleased",
-            x: info.x,
-            y: info.y,
-            button: "left",
-            clickCount: 1,
-          });
-        }
+        info = await resolveElementInfo(params.tabId, params.target);
+      }
+      if (info) {
+        await injectAgentVisualCue(params.tabId, {
+          type: "type",
+          x: info.x,
+          y: info.y,
+          rect: info.rect,
+          label: `Type: "${params.text || ""}"`,
+        });
+      } else {
+        await injectAgentVisualCue(params.tabId, {
+          type: "type",
+          label: `Type: "${params.text || ""}"`,
+        });
+      }
+
+      await attachDebuggerIfNeeded(params.tabId);
+      if (info) {
+        await chrome.debugger.sendCommand({ tabId: params.tabId }, "Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x: info.x,
+          y: info.y,
+          button: "left",
+          clickCount: 1,
+        });
+        await chrome.debugger.sendCommand({ tabId: params.tabId }, "Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x: info.x,
+          y: info.y,
+          button: "left",
+          clickCount: 1,
+        });
       }
       await chrome.debugger.sendCommand({ tabId: params.tabId }, "Input.insertText", {
         text: params.text,
@@ -1237,12 +1728,296 @@ async function handleRpc(action, params = {}) {
 
     case "screenshot": {
       await attachDebuggerIfNeeded(params.tabId);
+      const format = params.format === "jpeg" ? "jpeg" : "png";
+      const cmdParams = { format };
+      if (format === "jpeg" && params.quality !== undefined) {
+        cmdParams.quality = Math.max(0, Math.min(100, params.quality));
+      }
+
+      if (params.target) {
+        const info = await resolveElementInfo(params.tabId, params.target);
+        if (!info || !info.rect) {
+          throw new Error(`Target element "${params.target}" not found for screenshot.`);
+        }
+        cmdParams.clip = {
+          x: info.rect.x,
+          y: info.rect.y,
+          width: Math.max(1, info.rect.width),
+          height: Math.max(1, info.rect.height),
+          scale: 1,
+        };
+      } else if (params.fullPage) {
+        const metrics = await chrome.debugger.sendCommand(
+          { tabId: params.tabId },
+          "Page.getLayoutMetrics"
+        );
+        const width = Math.ceil(metrics.cssContentSize ? metrics.cssContentSize.width : metrics.contentSize.width);
+        const height = Math.ceil(metrics.cssContentSize ? metrics.cssContentSize.height : metrics.contentSize.height);
+        cmdParams.clip = { x: 0, y: 0, width, height, scale: 1 };
+        cmdParams.captureBeyondViewport = true;
+      }
+
       const { data } = await chrome.debugger.sendCommand(
         { tabId: params.tabId },
         "Page.captureScreenshot",
-        { format: "png" }
+        cmdParams
       );
-      return { base64Png: data };
+      return {
+        base64Png: data,
+        base64Image: data,
+        format,
+        mimeType: format === "jpeg" ? "image/jpeg" : "image/png",
+      };
+    }
+
+    case "print_to_pdf": {
+      await attachDebuggerIfNeeded(params.tabId);
+      const printOptions = {
+        landscape: params.landscape ?? false,
+        displayHeaderFooter: params.displayHeaderFooter ?? false,
+        printBackground: params.printBackground ?? true,
+        scale: params.scale ?? 1,
+        paperWidth: params.paperWidth ?? 8.5,
+        paperHeight: params.paperHeight ?? 11,
+        marginTop: params.marginTop ?? 0.4,
+        marginBottom: params.marginBottom ?? 0.4,
+        marginLeft: params.marginLeft ?? 0.4,
+        marginRight: params.marginRight ?? 0.4,
+        pageRanges: params.pageRanges || "",
+      };
+      const { data } = await chrome.debugger.sendCommand(
+        { tabId: params.tabId },
+        "Page.printToPDF",
+        printOptions
+      );
+      return {
+        success: true,
+        tabId: params.tabId,
+        base64Pdf: data,
+        sizeBytes: Math.round((data.length * 3) / 4),
+      };
+    }
+
+    case "wait_for_download": {
+      const timeoutMs = params.timeoutMs || 30000;
+      return new Promise((resolve, reject) => {
+        let timer = null;
+        let trackedDownloadId = null;
+
+        const cleanup = () => {
+          if (timer) clearTimeout(timer);
+          chrome.downloads.onCreated.removeListener(createListener);
+          chrome.downloads.onChanged.removeListener(changeListener);
+        };
+
+        timer = setTimeout(() => {
+          cleanup();
+          resolve({ timedOut: true, message: `No download completed within ${timeoutMs}ms.` });
+        }, timeoutMs);
+
+        function createListener(item) {
+          if (!trackedDownloadId) {
+            trackedDownloadId = item.id;
+          }
+        }
+
+        function changeListener(delta) {
+          if (trackedDownloadId && delta.id === trackedDownloadId) {
+            if (delta.state && delta.state.current === "complete") {
+              chrome.downloads.search({ id: trackedDownloadId }).then(([item]) => {
+                cleanup();
+                resolve({
+                  success: true,
+                  downloadId: item.id,
+                  filename: item.filename,
+                  fileSize: item.fileSize,
+                  mimeType: item.mime,
+                  url: item.url,
+                  state: "complete",
+                });
+              });
+            } else if (delta.error) {
+              cleanup();
+              reject(new Error(`Download failed: ${delta.error.current}`));
+            }
+          }
+        }
+
+        chrome.downloads.onCreated.addListener(createListener);
+        chrome.downloads.onChanged.addListener(changeListener);
+      });
+    }
+
+    case "list_downloads": {
+      const limit = params.limit || 10;
+      const query = { limit, orderBy: ["-startTime"] };
+      if (params.query) query.query = [params.query];
+      const items = await chrome.downloads.search(query);
+      return {
+        count: items.length,
+        downloads: items.map((d) => ({
+          id: d.id,
+          filename: d.filename,
+          url: d.url,
+          fileSize: d.fileSize,
+          mime: d.mime,
+          state: d.state,
+          startTime: d.startTime,
+          endTime: d.endTime,
+        })),
+      };
+    }
+
+    case "request_human_takeover": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const reason = params.reason || "The AI Agent requires your interaction (e.g. 2FA, CAPTCHA, or confirmation).";
+      const timeoutMs = params.timeoutMs || 120000;
+
+      await chrome.scripting.executeScript({
+        target: { tabId: params.tabId },
+        args: [reason],
+        func: (msg) => {
+          let banner = document.getElementById("__agent_takeover_banner");
+          if (!banner) {
+            banner = document.createElement("div");
+            banner.id = "__agent_takeover_banner";
+            banner.style.cssText = `
+              position: fixed;
+              top: 16px;
+              left: 50%;
+              transform: translateX(-50%);
+              z-index: 2147483647;
+              background: #0f172a;
+              color: #f8fafc;
+              border: 2px solid #38bdf8;
+              box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 20px rgba(56, 189, 248, 0.4);
+              padding: 12px 20px;
+              border-radius: 12px;
+              display: flex;
+              align-items: center;
+              gap: 16px;
+              font-family: system-ui, -apple-system, sans-serif;
+              font-size: 14px;
+              font-weight: 500;
+              transition: all 0.2s ease;
+            `;
+            const textSpan = document.createElement("span");
+            textSpan.id = "__agent_takeover_text";
+            textSpan.style.cssText = "display: flex; align-items: center; gap: 8px;";
+            textSpan.innerHTML = `<span style="font-size: 18px;">🤖</span> <strong>Agent Paused:</strong> <span style="color: #cbd5e1;">${msg}</span>`;
+
+            const btn = document.createElement("button");
+            btn.id = "__agent_takeover_resume_btn";
+            btn.innerText = "Resume Agent ➔";
+            btn.style.cssText = `
+              background: #0284c7;
+              color: white;
+              border: none;
+              padding: 8px 14px;
+              border-radius: 8px;
+              font-weight: 600;
+              font-size: 13px;
+              cursor: pointer;
+              box-shadow: 0 2px 8px rgba(2, 132, 199, 0.4);
+            `;
+            btn.addEventListener("click", () => {
+              window.__agentTakeoverResumed = true;
+              if (banner) banner.remove();
+            });
+
+            banner.appendChild(textSpan);
+            banner.appendChild(btn);
+            document.body.appendChild(banner);
+          }
+          window.__agentTakeoverResumed = false;
+        },
+      });
+
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        const [{ result }] = await chrome.scripting.executeScript({
+          target: { tabId: params.tabId },
+          func: () => Boolean(window.__agentTakeoverResumed),
+        });
+
+        if (result) {
+          return {
+            success: true,
+            resumed: true,
+            elapsedSeconds: Math.round((Date.now() - start) / 1000),
+          };
+        }
+        await new Promise((r) => setTimeout(r, 600));
+      }
+
+      await chrome.scripting.executeScript({
+        target: { tabId: params.tabId },
+        func: () => {
+          const b = document.getElementById("__agent_takeover_banner");
+          if (b) b.remove();
+        },
+      });
+
+      return {
+        success: false,
+        resumed: false,
+        timedOut: true,
+        message: `User takeover timed out after ${Math.round(timeoutMs / 1000)}s.`,
+      };
+    }
+
+    case "clipboard": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const operation = params.operation || "get";
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: params.tabId },
+        args: [operation, params.text || ""],
+        func: async (op, textToSet) => {
+          if (op === "set") {
+            await navigator.clipboard.writeText(textToSet);
+            return { operation: "set", success: true, text: textToSet };
+          }
+          const text = await navigator.clipboard.readText();
+          return { operation: "get", success: true, text };
+        },
+      });
+      if (params.operation === "set") {
+        await injectAgentVisualCue(params.tabId, {
+          type: "type",
+          label: `Clipboard Copy: "${(params.text || "").slice(0, 35)}"`,
+        });
+      }
+      return { success: true, tabId: params.tabId, ...result };
+    }
+
+    case "manage_tab_group": {
+      const { action = "group", tabIds, title, color } = params;
+      if (!tabIds || !tabIds.length) throw new Error("Missing tabIds array for tab group operation.");
+
+      if (action === "ungroup") {
+        await chrome.tabs.ungroup(tabIds);
+        return { success: true, action: "ungroup", tabIds };
+      }
+
+      const groupId = await chrome.tabs.group({ tabIds });
+      const updateData = {};
+      if (title) updateData.title = title;
+      if (color) updateData.color = color;
+      if (action === "collapse") updateData.collapsed = true;
+      if (action === "expand") updateData.collapsed = false;
+
+      if (Object.keys(updateData).length > 0) {
+        await chrome.tabGroups.update(groupId, updateData);
+      }
+
+      return {
+        success: true,
+        groupId,
+        tabIds,
+        title: title || undefined,
+        color: color || undefined,
+        collapsed: updateData.collapsed ?? false,
+      };
     }
 
     case "reload_extension": {
@@ -1323,6 +2098,10 @@ async function connectWebSocket() {
         }
 
         if (msg.id && msg.action) {
+          activeRpcCount++;
+          currentExecutingAction = msg.action;
+          lastAgentActionTime = Date.now();
+          updateBadge();
           try {
             const result = await handleRpc(msg.action, msg.params);
             logAgentAction(msg.action, msg.params, result, null);
@@ -1330,6 +2109,10 @@ async function connectWebSocket() {
           } catch (err) {
             logAgentAction(msg.action, msg.params, null, err);
             ws.send(JSON.stringify({ id: msg.id, error: err.message }));
+          } finally {
+            activeRpcCount = Math.max(0, activeRpcCount - 1);
+            if (activeRpcCount === 0) currentExecutingAction = null;
+            updateBadge();
           }
         }
       } catch (parseErr) {
@@ -1396,7 +2179,20 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // Extension Popup communication
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "getStatus") {
-    chrome.tabs.query({}).then((tabs) => {
+    Promise.all([
+      chrome.tabs.query({}),
+      chrome.tabs.query({ active: true, currentWindow: true }),
+    ]).then(([tabs, activeTabs]) => {
+      const activeTab = activeTabs && activeTabs[0]
+        ? {
+            id: activeTabs[0].id,
+            title: activeTabs[0].title || "Untitled",
+            url: activeTabs[0].url || "about:blank",
+            favIconUrl: activeTabs[0].favIconUrl || "",
+            debuggerAttached: attachedTabs.has(activeTabs[0].id),
+          }
+        : null;
+
       sendResponse({
         connected: Boolean(wsSocket && wsSocket.readyState === WebSocket.OPEN),
         profileId,
@@ -1407,8 +2203,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         browser: detectBrowser(),
         debuggerAttachedCount: attachedTabs.size,
         totalActions: totalActionCount,
+        isBusy: activeRpcCount > 0,
+        currentAction: currentExecutingAction,
+        lastActionTime: lastAgentActionTime,
+        activeTab,
       });
     });
+    return true;
+  }
+
+  if (request.action === "testHighlight") {
+    if (!request.tabId) {
+      sendResponse({ success: false, error: "Missing tabId" });
+      return true;
+    }
+    handleRpc("get_interactive_snapshot", { tabId: request.tabId })
+      .then(async (res) => {
+        if (res && res.list && res.list.length > 0) {
+          const first = res.list[0];
+          await injectAgentVisualCue(request.tabId, {
+            type: "click",
+            x: first.bounds ? first.bounds.x : 100,
+            y: first.bounds ? first.bounds.y : 100,
+            rect: first.bounds
+              ? {
+                  x: first.bounds.x - Math.round(first.bounds.w / 2),
+                  y: first.bounds.y - Math.round(first.bounds.h / 2),
+                  width: first.bounds.w,
+                  height: first.bounds.h,
+                }
+              : null,
+            label: `Agent Bridge: ${res.count} interactive targets identified`,
+          });
+        }
+        sendResponse({ success: true, count: res.count });
+      })
+      .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
 
