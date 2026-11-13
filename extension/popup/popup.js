@@ -1,4 +1,4 @@
-// Agent Bridge MCP - Ultra-Refined Popup Controller v2.0
+// Agent Bridge MCP - Ultra-Refined Popup Controller v2.1.0
 
 // DOM Elements - Status & Navigation
 const statusBadge = document.getElementById("statusBadge");
@@ -637,6 +637,14 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
+
+// Display dynamic extension version from manifest
+try {
+  const versionTag = document.querySelector(".version-tag");
+  if (versionTag && chrome.runtime?.getManifest) {
+    versionTag.innerText = `MCP v${chrome.runtime.getManifest().version}`;
+  }
+} catch {}
 
 // Initial setup
 const savedTab = sessionStorage.getItem("active_popup_tab") || "control";

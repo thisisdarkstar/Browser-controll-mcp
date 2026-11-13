@@ -8,7 +8,7 @@ description: >-
   filling forms, capturing screenshots, debugging console/network, or running browser automation.
 license: Apache-2.0
 metadata:
-  version: v2.0
+  version: v2.1.0
   publisher: local
 ---
 
