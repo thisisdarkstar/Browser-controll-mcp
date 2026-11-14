@@ -1,6 +1,6 @@
 // Agent Bridge MCP - Tab, Window & Profile Tools (ES Module)
 import { z } from "zod";
-import { activeProfiles, jsonResult } from "../core/state.js";
+import { activeProfiles, jsonResult, serverState, PORT } from "../core/state.js";
 import { ensureMasterOrRelay, callProfileExtension } from "../core/bridge.js";
 
 export function registerTabTools(server) {
@@ -11,6 +11,13 @@ export function registerTabTools(server) {
     },
     async () => {
       await ensureMasterOrRelay();
+      if (!serverState.isMasterServer) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${PORT}/profiles`);
+          const data = await res.json();
+          return jsonResult(data);
+        } catch {}
+      }
       const profiles = Array.from(activeProfiles.values()).map((p) => ({
         id: p.id,
         name: p.name,
