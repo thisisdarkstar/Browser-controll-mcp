@@ -41,7 +41,7 @@ This skill guides agents in controlling the user's real, active browser profile 
 
 ---
 
-## 🧰 Core Tool Reference (68 Tools)
+## 🧰 Core Tool Reference (69 Tools)
 
 ### 1. Tab, Window & Navigation Management
 * **`browser_list_profiles`**: List all connected browser profiles, their IDs, names, and active status.
@@ -123,27 +123,7 @@ This skill guides agents in controlling the user's real, active browser profile 
 * **`browser_get_telemetry`**: Combined telemetry snapshot (console logs, network requests, dialog events).
 * **`browser_take_heapsnapshot`**: V8 heap snapshot for debugging memory leaks.
 * **`browser_performance_trace`** / **`browser_performance_analyze_insight`**: Performance and Core Web Vitals profiling.
-
----
-
-## ⚡ Direct HTTP RPC Fallback (Instant PowerShell / Bash Access)
-
-The Master Server runs a lightweight HTTP JSON-RPC endpoint at `http://127.0.0.1:18922`:
-
-```powershell
-# 1. Health check & profile list
-Invoke-RestMethod -Uri "http://127.0.0.1:18922/health" -Method Get
-Invoke-RestMethod -Uri "http://127.0.0.1:18922/profiles" -Method Get
-
-# 2. List all open tabs
-$body = '{"action":"list_tabs","params":{}}'
-(Invoke-RestMethod -Uri "http://127.0.0.1:18922/rpc" -Method Post -ContentType "application/json" -Body $body).result
-
-# 3. Evaluate JavaScript on any tab
-$script = '(() => ({ title: document.title, url: window.location.href }))()'
-$body = @{ action = "eval_js"; params = @{ tabId = <TAB_ID>; expression = $script } } | ConvertTo-Json
-(Invoke-RestMethod -Uri "http://127.0.0.1:18922/rpc" -Method Post -ContentType "application/json" -Body $body).result.result.value
-```
+* **`browser_reload_extension`**: Hot reloads the Agent Bridge extension service worker in the target browser profile.
 
 ---
 

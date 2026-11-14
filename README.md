@@ -19,7 +19,7 @@
 | **Virtual Agent Cursor & Live HUD** | ❌ Invisible headless actions | ✅ **Yes!** Live cyan cursor gliding across elements, floating action tooltip (`🤖`), shockwave click ripples, scroll banners, & bounding box overlays |
 | **All-Tab Visibility** | ❌ One tab at a time | ✅ **Yes!** `browser_read_all_tabs` reads text across all open tabs simultaneously |
 | **Killswitch Privacy Toggle** | ❌ None | ✅ **Yes!** Instant "Allow Agent Control" switch in the extension popup |
-| **Full CDP Coverage** | ⚠️ 30 tools | ✅ **68 tools** (DevTools tools + Markdown/Table extract + Ad-blocking + Bookmarks + History + Media + Desktop Alerts + Downloads + Groups) |
+| **Full CDP Coverage** | ⚠️ 30 tools | ✅ **69 tools** (DevTools tools + Markdown/Table extract + Ad-blocking + Bookmarks + History + Media + Desktop Alerts + Downloads + Groups + Hot Extension Reload) |
 
 ---
 
@@ -69,7 +69,7 @@ Add a new MCP server in Settings:
 
 ---
 
-## 🛠️ Complete Tool Catalog (68 Tools)
+## 🛠️ Complete Tool Catalog (69 Tools)
 
 ### 1. Multi-Profile, Tab & Window Management
 - `browser_list_profiles`: List all connected browser profiles (e.g. Work, Personal), IDs, and active status.
@@ -160,6 +160,7 @@ Add a new MCP server in Settings:
 ### 11. JavaScript Execution & Raw CDP Escape Hatch
 - `browser_eval_js`: Evaluate arbitrary JavaScript in the tab context with async/await and return serialized values.
 - `browser_raw_cdp`: Absolute escape hatch: execute ANY Chrome DevTools Protocol command with custom parameters.
+- `browser_reload_extension`: Hot reload the Agent Bridge Chrome extension service worker in the browser profile.
 
 ---
 
@@ -179,14 +180,14 @@ browser-control-extension/
 │   ├── background.js   # Service worker entrypoint (< 150 lines)
 │   ├── core/           # State, WebSocket client, CDP event router
 │   ├── ui/             # Virtual cursor, keyframes, scroll HUD & DOM resolver
-│   ├── actions/        # 68 modular action handlers (tabs, dom, extraction, network, media)
+│   ├── actions/        # 69 modular action handlers (tabs, dom, extraction, network, media)
 │   ├── popup/          # 5-tab control panel UI (Control, Tabs, Activity, Setup, Doctor)
 │   └── manifest.json   # Manifest V3 with native "type": "module"
 ├── server/             # MCP server (published as agent-browser-bridge on npm)
 │   ├── bin/cli.js      # CLI executable for npx execution
 │   ├── index.js        # Thin master entrypoint (< 30 lines)
 │   ├── core/           # State, HTTP/WS bridge, master-relay auto-promotion
-│   ├── tools/          # 68 modular MCP tool definitions & executors
+│   ├── tools/          # 69 modular MCP tool definitions & executors
 │   └── package.json    # Package definition and npm metadata
 └── .agents/            # Agent skills and guidelines
     └── skills/

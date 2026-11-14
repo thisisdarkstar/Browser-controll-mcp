@@ -35,15 +35,17 @@ export const navigationActions = {
     try {
       await chrome.tabs.goBack(params.tabId);
     } catch {
-      await chrome.scripting.executeScript({
-        target: { tabId: params.tabId },
-        func: () => window.history.back(),
-      });
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: params.tabId },
+          func: () => window.history.back(),
+        });
+      } catch {}
     }
-    await injectAgentVisualCue(params.tabId, {
+    injectAgentVisualCue(params.tabId, {
       type: "navigate",
       label: "Navigating Back",
-    });
+    }).catch(() => {});
     return { success: true, tabId: params.tabId, navigated: "back" };
   },
 
@@ -52,15 +54,17 @@ export const navigationActions = {
     try {
       await chrome.tabs.goForward(params.tabId);
     } catch {
-      await chrome.scripting.executeScript({
-        target: { tabId: params.tabId },
-        func: () => window.history.forward(),
-      });
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: params.tabId },
+          func: () => window.history.forward(),
+        });
+      } catch {}
     }
-    await injectAgentVisualCue(params.tabId, {
+    injectAgentVisualCue(params.tabId, {
       type: "navigate",
       label: "Navigating Forward",
-    });
+    }).catch(() => {});
     return { success: true, tabId: params.tabId, navigated: "forward" };
   },
 

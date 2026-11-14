@@ -53,7 +53,7 @@ Add a new MCP server in settings:
 
 ---
 
-## 🛠️ Complete Tool Catalog (68 Tools)
+## 🛠️ Complete Tool Catalog (69 Tools)
 
 ### Multi-Profile & Tab Management
 - `browser_list_profiles`: List all connected browser profiles (Work, Personal, Brave, Edge).

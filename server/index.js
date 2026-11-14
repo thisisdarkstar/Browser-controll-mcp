@@ -15,7 +15,7 @@ const server = new McpServer({
   version: "2.2.0",
 });
 
-// 3. Register All 68 Tools Across Modules
+// 3. Register All 69 Tools Across Modules
 registerAllTools(server);
 
 // 4. Start Transport
