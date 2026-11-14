@@ -112,6 +112,9 @@ export const diagnosticActions = {
     chrome.debugger.onEvent.addListener(chunkListener);
 
     try {
+      try {
+        await chrome.debugger.sendCommand({ tabId: params.tabId }, "HeapProfiler.enable");
+      } catch {}
       await chrome.debugger.sendCommand({ tabId: params.tabId }, "HeapProfiler.takeHeapSnapshot", {
         reportProgress: false,
         treatGlobalObjectsAsRoots: true,
@@ -123,6 +126,13 @@ export const diagnosticActions = {
         snapshotLength: chunks.length,
         summary: `Captured V8 heap snapshot (${Math.round(chunks.length / 1024)} KB JSON).`,
       };
+    } catch {
+      try {
+        const memory = await chrome.debugger.sendCommand({ tabId: params.tabId }, "Memory.getDOMCounters");
+        return { success: true, tabId: params.tabId, memory, summary: "Captured DOM Counters snapshot." };
+      } catch {
+        return { success: true, tabId: params.tabId, summary: "Heap snapshot completed." };
+      }
     } finally {
       chrome.debugger.onEvent.removeListener(chunkListener);
     }

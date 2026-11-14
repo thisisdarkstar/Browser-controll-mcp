@@ -53,6 +53,83 @@ export function startMasterServer() {
       return;
     }
 
+    if (reqUrl.pathname === "/test-fixture") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Agent Bridge Test Fixture</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; padding: 24px; min-height: 2500px; background: #0b0f19; color: #f8fafc; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; background: #1e293b; border-radius: 8px; overflow: hidden; }
+    th, td { border: 1px solid #334155; padding: 10px 14px; text-align: left; }
+    th { background: #0f172a; color: #00e5ff; }
+    input, select, button { padding: 8px 12px; margin: 4px; border-radius: 6px; border: 1px solid #475569; background: #1e293b; color: white; }
+    button { background: #00e5ff; color: #020617; font-weight: bold; cursor: pointer; }
+    .box { width: 120px; height: 80px; background: #3b82f6; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin: 12px 0; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Agent Bridge MCP Automated Test Fixture</h1>
+  <p>Test paragraph for markdown extraction and find-in-page search keyword cohort testing.</p>
+
+  <section id="form-section">
+    <h2>Form Controls</h2>
+    <form id="test-form">
+      <input type="text" id="username" name="username" placeholder="Enter username" />
+      <input type="password" id="password" name="password" placeholder="Enter password" />
+      <select id="role-select" name="role">
+        <option value="admin">Administrator</option>
+        <option value="developer" selected>Developer</option>
+        <option value="designer">Designer</option>
+      </select>
+      <label><input type="checkbox" id="subscribe" name="subscribe" /> Subscribe to updates</label>
+      <label><input type="radio" name="plan" value="pro" id="plan-pro" /> Pro Plan</label>
+      <label><input type="radio" name="plan" value="free" id="plan-free" checked /> Free Plan</label>
+      <input type="file" id="file-input" />
+      <button type="button" id="submit-btn" onclick="console.log('Button clicked!');">Submit Form</button>
+    </form>
+  </section>
+
+  <section id="table-section">
+    <h2>Data Table</h2>
+    <table id="metrics-table">
+      <caption>Performance Metrics</caption>
+      <thead>
+        <tr><th>Metric</th><th>Score</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>LCP</td><td>1.2s</td><td>Good</td></tr>
+        <tr><td>FID</td><td>18ms</td><td>Good</td></tr>
+        <tr><td>CLS</td><td>0.01</td><td>Excellent</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="drag-section">
+    <h2>Drag Target</h2>
+    <div id="drag-source" class="box">Drag Me</div>
+    <div id="drag-target" class="box" style="background: #10b981;">Drop Here</div>
+  </section>
+
+  <section id="media-section">
+    <h2>Media Player</h2>
+    <video id="test-video" width="320" height="180" controls>
+      <source src="data:video/mp4;base64," type="video/mp4">
+      <track kind="captions" label="English" srclang="en" default>
+    </video>
+  </section>
+
+  <div style="margin-top: 1500px;" id="footer-section">
+    <h2>Deep Scroll Anchor</h2>
+    <p>Target found at bottom of page.</p>
+  </div>
+</body>
+</html>`);
+      return;
+    }
+
     if (req.method === "GET" && reqUrl.pathname === "/profiles") {
       const list = Array.from(activeProfiles.values()).map((p) => ({
         id: p.id,

@@ -382,7 +382,7 @@ export const interactionActions = {
 
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: params.tabId },
-      args: [target, params.value, params.label, params.index],
+      args: [target, params.value ?? null, params.label ?? null, params.index ?? null],
       func: (targetSel, val, lbl, idx) => {
         function findEl(root, sel) {
           try {

@@ -7,7 +7,7 @@ export const mediaActions = {
     const action = params.action || "toggle";
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: params.tabId },
-      args: [action, params.value],
+      args: [action, params.value ?? null],
       func: (act, val) => {
         const media = document.querySelector("video, audio");
         if (!media) return { error: "No <video> or <audio> element found on page." };
