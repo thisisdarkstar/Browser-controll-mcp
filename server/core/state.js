@@ -65,3 +65,4 @@ export function spawnIsolatedBrowser() {
   );
   serverState.browserProcess.unref();
 }
+

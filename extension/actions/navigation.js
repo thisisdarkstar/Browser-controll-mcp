@@ -77,3 +77,4 @@ export const navigationActions = {
     return { success: true, tabId: params.tabId, reloaded: true };
   },
 };
+

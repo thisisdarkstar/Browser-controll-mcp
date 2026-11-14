@@ -167,3 +167,4 @@ export function registerDiagnosticTools(server) {
     }
   );
 }
+

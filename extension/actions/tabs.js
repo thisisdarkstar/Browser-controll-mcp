@@ -242,3 +242,4 @@ export const tabActions = {
     return { success: true, tabId: params.tabId, ...result };
   },
 };
+

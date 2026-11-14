@@ -81,3 +81,4 @@ export const mediaActions = {
     return { success: true, tabId: params.tabId, ...result };
   },
 };
+

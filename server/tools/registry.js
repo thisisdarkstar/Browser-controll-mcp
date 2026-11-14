@@ -20,3 +20,4 @@ export function registerAllTools(server) {
   registerEmulationTools(server);
   registerDiagnosticTools(server);
 }
+

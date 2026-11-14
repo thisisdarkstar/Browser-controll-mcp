@@ -112,3 +112,4 @@ export function ensureTabStore(tabId) {
   }
   return state.tabTelemetry.get(tabId);
 }
+

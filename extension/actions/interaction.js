@@ -555,3 +555,4 @@ export const interactionActions = {
     return { success: true, tabId: params.tabId, target, ...result };
   },
 };
+

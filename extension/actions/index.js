@@ -40,3 +40,4 @@ export async function handleRpc(action, params = {}) {
 }
 
 export { actionRegistry };
+

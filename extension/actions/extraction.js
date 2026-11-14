@@ -331,3 +331,4 @@ export const extractionActions = {
     return { success: true, tabId: params.tabId, ...result };
   },
 };
+
