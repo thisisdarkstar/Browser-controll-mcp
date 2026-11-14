@@ -11,6 +11,8 @@
   "files": [
     "bin",
     "index.js",
+    "core",
+    "tools",
     "README.md"
   ],
   "scripts": {
