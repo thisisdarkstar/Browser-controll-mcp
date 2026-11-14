@@ -171,20 +171,23 @@ Add a new MCP server in Settings:
 
 ---
 
-## 📂 Project Structure
+## 📂 Project Structure (Modular Native ES Architecture)
 
 ```
 browser-control-extension/
-├── extension/          # Manifest V3 browser extension (Chrome, Edge, Brave)
-│   ├── background.js   # Service worker with multi-tab CDP dispatcher
-│   ├── manifest.json   # Extension manifest V3
+├── extension/          # Manifest V3 browser extension (Native ES Module)
+│   ├── background.js   # Service worker entrypoint (< 150 lines)
+│   ├── core/           # State, WebSocket client, CDP event router
+│   ├── ui/             # Virtual cursor, keyframes, scroll HUD & DOM resolver
+│   ├── actions/        # 68 modular action handlers (tabs, dom, extraction, network, media)
 │   ├── popup/          # 5-tab control panel UI (Control, Tabs, Activity, Setup, Doctor)
-│   └── README.md       # Extension setup and permissions documentation
+│   └── manifest.json   # Manifest V3 with native "type": "module"
 ├── server/             # MCP server (published as agent-browser-bridge on npm)
 │   ├── bin/cli.js      # CLI executable for npx execution
-│   ├── index.js        # Master/Relay MCP server with 39 tools
-│   ├── package.json    # Package definition and npm metadata
-│   └── README.md       # npm package documentation
+│   ├── index.js        # Thin master entrypoint (< 30 lines)
+│   ├── core/           # State, HTTP/WS bridge, master-relay auto-promotion
+│   ├── tools/          # 68 modular MCP tool definitions & executors
+│   └── package.json    # Package definition and npm metadata
 └── .agents/            # Agent skills and guidelines
     └── skills/
         └── custom-browser-bridge/SKILL.md
