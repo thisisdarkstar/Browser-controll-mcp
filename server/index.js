@@ -84,13 +84,16 @@ function startMasterServer() {
       return;
     }
 
-    if (req.method === "POST" && req.url === "/rpc") {
+    const reqUrl = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+
+    if (req.method === "POST" && reqUrl.pathname === "/rpc") {
       let body = "";
       req.on("data", (chunk) => (body += chunk));
       req.on("end", async () => {
         try {
-          const { profile, action, params } = JSON.parse(body);
-          const result = await callProfileExtensionInternal(profile, action, params);
+          const parsed = JSON.parse(body || "{}");
+          const targetProfile = parsed.profile || reqUrl.searchParams.get("profile");
+          const result = await callProfileExtensionInternal(targetProfile, parsed.action, parsed.params || {});
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ success: true, result }));
         } catch (err) {
@@ -594,6 +597,54 @@ server.registerTool(
 );
 
 server.registerTool(
+  "browser_get_markdown",
+  {
+    description: "Extract clean, readable GitHub-flavored Markdown from the active or specified tab, stripping navbars, ads, scripts, and clutter to maximize LLM token efficiency.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId to extract content from"),
+      selector: z.string().optional().describe("Optional CSS selector to extract from (defaults to main/article/body)"),
+      includeLinks: z.boolean().optional().describe("Whether to retain hyperlinks in markdown (default true)"),
+      includeImages: z.boolean().optional().describe("Whether to retain image tags in markdown (default false)"),
+      maxLength: z.number().optional().describe("Max character limit for returned markdown (default 50000)"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, selector, includeLinks, includeImages, maxLength, profile }) =>
+    jsonResult(await callProfileExtension(profile, "get_markdown", { tabId, selector, includeLinks, includeImages, maxLength }))
+);
+
+server.registerTool(
+  "browser_extract_table",
+  {
+    description: "Automatically detect and parse HTML <table> elements or repetitive data grids on the page into structured JSON, CSV, or Markdown tables.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId to inspect"),
+      target: z.string().optional().describe("Optional table selector (e.g. '#data-table', 'table.results') or element ref"),
+      format: z.enum(["json", "markdown", "csv"]).optional().describe("Output format: 'json' (default), 'markdown', or 'csv'"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, target, format, profile }) =>
+    jsonResult(await callProfileExtension(profile, "extract_table", { tabId, target, format }))
+);
+
+server.registerTool(
+  "browser_find_in_page",
+  {
+    description: "Fast in-page text search (equivalent to Chrome Ctrl+F). Returns match count, surrounding snippets, coordinates, and can smoothly scroll to match #N with visual highlight.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId to search in"),
+      query: z.string().describe("Text to search for"),
+      caseSensitive: z.boolean().optional().describe("Whether search is case-sensitive (default false)"),
+      scrollToIndex: z.number().optional().describe("0-based index of match to scroll into view and highlight"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, query, caseSensitive, scrollToIndex, profile }) =>
+    jsonResult(await callProfileExtension(profile, "find_in_page", { tabId, query, caseSensitive, scrollToIndex }))
+);
+
+server.registerTool(
   "browser_wait_for",
   {
     description: "Wait for specific text or a CSS selector to appear on the page.",
@@ -761,6 +812,54 @@ server.registerTool(
     },
   },
   async ({ tabId, action, promptText, profile }) => jsonResult(await callProfileExtension(profile, "handle_dialog", { tabId, action, promptText }))
+);
+
+server.registerTool(
+  "browser_select_option",
+  {
+    description: "Deterministically select an option from a <select> dropdown element by value, visible text label, or index.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId"),
+      target: z.string().describe("Ref (e.g. 'ref_5') or CSS selector for the <select> element"),
+      value: z.string().optional().describe("Option value to select"),
+      label: z.string().optional().describe("Visible text label of option to select"),
+      index: z.number().optional().describe("0-based index of option to select"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, target, value, label, index, profile }) =>
+    jsonResult(await callProfileExtension(profile, "select_option", { tabId, target, value, label, index }))
+);
+
+server.registerTool(
+  "browser_set_checked",
+  {
+    description: "Explicitly set a checkbox or radio input to checked (true) or unchecked (false) with visual feedback.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId"),
+      target: z.string().describe("Ref (e.g. 'ref_9') or CSS selector for the checkbox or radio input"),
+      checked: z.boolean().describe("Desired state: true to check, false to uncheck"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, target, checked, profile }) =>
+    jsonResult(await callProfileExtension(profile, "set_checked", { tabId, target, checked }))
+);
+
+server.registerTool(
+  "browser_download_file",
+  {
+    description: "Programmatically trigger a file download from a direct URL with custom filename and conflict handling.",
+    inputSchema: {
+      url: z.string().describe("URL of the file to download"),
+      filename: z.string().optional().describe("Optional filename or relative path to save as"),
+      conflictAction: z.enum(["uniquify", "overwrite", "prompt"]).optional().describe("File conflict action (default: 'uniquify')"),
+      tabId: z.number().optional().describe("Optional active tabId to display visual download indicator"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ url, filename, conflictAction, tabId, profile }) =>
+    jsonResult(await callProfileExtension(profile, "download_file", { url, filename, conflictAction, tabId }))
 );
 
 // ---------------------------------------------------------------------------
@@ -1097,6 +1196,221 @@ server.registerTool(
     },
   },
   async ({ tabId, method, commandParams, profile }) => jsonResult(await callProfileExtension(profile, "raw_cdp", { tabId, method, commandParams }))
+);
+
+// ---------------------------------------------------------------------------
+// Network Interception, Ad-Blocking & Routing
+// ---------------------------------------------------------------------------
+server.registerTool(
+  "browser_block_urls",
+  {
+    description: "Block specific URL patterns (e.g. ['*analytics*', '*ads*', '*.gif']) via CDP Network.setBlockedURLs to accelerate browsing and eliminate ad distractions.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId to block URLs in"),
+      patterns: z.union([z.string(), z.array(z.string())]).describe("URL pattern(s) with wildcards to block"),
+      clear: z.boolean().optional().describe("Set true to clear all blocked URL patterns"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, patterns, clear, profile }) =>
+    jsonResult(await callProfileExtension(profile, "block_urls", { tabId, patterns, clear }))
+);
+
+server.registerTool(
+  "browser_set_extra_headers",
+  {
+    description: "Inject custom HTTP headers into all outgoing requests in a tab (e.g. Authorization, X-Custom-Header, staging cookies).",
+    inputSchema: {
+      tabId: z.number().describe("The tabId"),
+      headers: z.record(z.string()).describe("Object of { headerName: headerValue }"),
+      clear: z.boolean().optional().describe("Set true to clear custom extra headers"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, headers, clear, profile }) =>
+    jsonResult(await callProfileExtension(profile, "set_extra_headers", { tabId, headers, clear }))
+);
+
+server.registerTool(
+  "browser_mock_route",
+  {
+    description: "Intercept HTTP requests matching a URL pattern and return custom mock status, headers, and response body via CDP Fetch.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId to apply mock route to"),
+      urlPattern: z.string().optional().describe("URL pattern to match (e.g. '*/api/user*', 'https://example.com/data.json')"),
+      status: z.number().optional().describe("HTTP response status code (default: 200)"),
+      headers: z.record(z.string()).optional().describe("Custom response headers object"),
+      responseBody: z.any().optional().describe("Mock response body (string or JSON object)"),
+      clear: z.boolean().optional().describe("Set true to disable mock routing on this tab"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, urlPattern, status, headers, responseBody, clear, profile }) =>
+    jsonResult(await callProfileExtension(profile, "mock_route", { tabId, urlPattern, status, headers, responseBody, clear }))
+);
+
+// ---------------------------------------------------------------------------
+// User Context (Bookmarks, History & Desktop Notifications)
+// ---------------------------------------------------------------------------
+server.registerTool(
+  "browser_search_bookmarks",
+  {
+    description: "Search personal browser bookmarks by query string or keyword.",
+    inputSchema: {
+      query: z.string().describe("Search query string"),
+      limit: z.number().optional().describe("Maximum number of results to return (default 50)"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ query, limit, profile }) =>
+    jsonResult(await callProfileExtension(profile, "search_bookmarks", { query, limit }))
+);
+
+server.registerTool(
+  "browser_add_bookmark",
+  {
+    description: "Create a new bookmark in the user's browser with title and URL.",
+    inputSchema: {
+      title: z.string().describe("Title for the bookmark"),
+      url: z.string().describe("URL to bookmark"),
+      parentId: z.string().optional().describe("Optional ID of the folder to save into"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ title, url, parentId, profile }) =>
+    jsonResult(await callProfileExtension(profile, "add_bookmark", { title, url, parentId }))
+);
+
+server.registerTool(
+  "browser_search_history",
+  {
+    description: "Search user's browser browsing history by query keyword and time range.",
+    inputSchema: {
+      query: z.string().describe("Search keyword in history"),
+      limit: z.number().optional().describe("Maximum results (default 50)"),
+      startTime: z.number().optional().describe("Start timestamp in ms (default: 7 days ago)"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ query, limit, startTime, profile }) =>
+    jsonResult(await callProfileExtension(profile, "search_history", { query, limit, startTime }))
+);
+
+server.registerTool(
+  "browser_show_notification",
+  {
+    description: "Display a native OS desktop notification from the browser (ideal for alerting user when a background agent task finishes).",
+    inputSchema: {
+      title: z.string().describe("Notification title"),
+      message: z.string().describe("Notification body message text"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ title, message, profile }) =>
+    jsonResult(await callProfileExtension(profile, "show_notification", { title, message }))
+);
+
+// ---------------------------------------------------------------------------
+// Media Controls (Audio & Video)
+// ---------------------------------------------------------------------------
+server.registerTool(
+  "browser_media_control",
+  {
+    description: "Control video/audio playback on active page (play, pause, toggle, mute, unmute, seek, set_volume, set_speed).",
+    inputSchema: {
+      tabId: z.number().describe("The tabId"),
+      action: z.enum(["play", "pause", "toggle", "mute", "unmute", "seek", "set_volume", "set_speed"]).describe("Media action to perform"),
+      value: z.number().optional().describe("Numeric parameter (seconds for seek, 0-1 for volume, 0.25-4 for speed)"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, action, value, profile }) =>
+    jsonResult(await callProfileExtension(profile, "media_control", { tabId, action, value }))
+);
+
+server.registerTool(
+  "browser_mute_tab",
+  {
+    description: "Mute or unmute audio on any open browser tab.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId to mute or unmute"),
+      muted: z.boolean().describe("True to mute audio, false to unmute"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, muted, profile }) =>
+    jsonResult(await callProfileExtension(profile, "mute_tab", { tabId, muted }))
+);
+
+server.registerTool(
+  "browser_get_subtitles",
+  {
+    description: "Extract live captions, subtitles, or text tracks from active video players on the page (e.g. YouTube, media players).",
+    inputSchema: {
+      tabId: z.number().describe("The tabId"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, profile }) =>
+    jsonResult(await callProfileExtension(profile, "get_subtitles", { tabId }))
+);
+
+// ---------------------------------------------------------------------------
+// Tab & Window Ergonomics
+// ---------------------------------------------------------------------------
+server.registerTool(
+  "browser_duplicate_tab",
+  {
+    description: "Duplicate an existing tab with its state and history.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId to duplicate"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, profile }) =>
+    jsonResult(await callProfileExtension(profile, "duplicate_tab", { tabId }))
+);
+
+server.registerTool(
+  "browser_pin_tab",
+  {
+    description: "Pin or unpin a tab to dock it in the browser tab strip.",
+    inputSchema: {
+      tabId: z.number().describe("The tabId"),
+      pinned: z.boolean().describe("True to pin, false to unpin"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, pinned, profile }) =>
+    jsonResult(await callProfileExtension(profile, "pin_tab", { tabId, pinned }))
+);
+
+server.registerTool(
+  "browser_set_zoom",
+  {
+    description: "Get or set page zoom level (e.g. 1.0 = 100%, 1.25 = 125%, 0.8 = 80%).",
+    inputSchema: {
+      tabId: z.number().describe("The tabId"),
+      zoomFactor: z.number().optional().describe("Zoom multiplier factor (e.g. 1.0, 1.25, 0.8). Omit to read current zoom."),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, zoomFactor, profile }) =>
+    jsonResult(await callProfileExtension(profile, "set_zoom", { tabId, zoomFactor }))
+);
+
+server.registerTool(
+  "browser_emulate_timezone",
+  {
+    description: "Override browser timezone using CDP Emulation (e.g. 'America/New_York', 'Asia/Tokyo', 'Europe/London').",
+    inputSchema: {
+      tabId: z.number().describe("The tabId"),
+      timezoneId: z.string().describe("IANA timezone string, e.g. 'America/New_York' or 'Asia/Tokyo'"),
+      profile: z.string().optional().describe("Optional profile name or ID"),
+    },
+  },
+  async ({ tabId, timezoneId, profile }) =>
+    jsonResult(await callProfileExtension(profile, "emulate_timezone", { tabId, timezoneId }))
 );
 
 // Connect MCP stdio transport

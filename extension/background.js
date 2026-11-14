@@ -10,6 +10,7 @@ let reconnectTimer = null;
 
 const attachedTabs = new Set();
 const tabTelemetry = new Map(); // tabId -> { console: [], network: Map(), dialogs: [] }
+const tabMockRoutes = new Map(); // tabId -> Array<{ urlPattern, status, headers, bodyBase64 }>
 let activeTracingTab = null;
 let activeTraceEvents = [];
 
@@ -162,6 +163,36 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     req.responseHeaders = params.response.headers;
     req.timing = params.response.timing;
     store.network.set(params.requestId, req);
+  } else if (method === "Fetch.requestPaused") {
+    const mocks = tabMockRoutes.get(tabId) || [];
+    const reqUrl = params.request.url;
+    const matched = mocks.find((m) => {
+      if (m.urlPattern.includes("*")) {
+        const regex = new RegExp("^" + m.urlPattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
+        return regex.test(reqUrl);
+      }
+      return reqUrl.includes(m.urlPattern);
+    });
+
+    if (matched) {
+      const headersList = Object.entries(matched.headers || {}).map(([name, value]) => ({
+        name,
+        value: String(value),
+      }));
+      if (!headersList.some((h) => h.name.toLowerCase() === "content-type")) {
+        headersList.push({ name: "Content-Type", value: "application/json; charset=utf-8" });
+      }
+      chrome.debugger.sendCommand({ tabId }, "Fetch.fulfillRequest", {
+        requestId: params.requestId,
+        responseCode: matched.status || 200,
+        responseHeaders: headersList,
+        body: matched.bodyBase64,
+      }).catch(() => {});
+    } else {
+      chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", {
+        requestId: params.requestId,
+      }).catch(() => {});
+    }
   } else if (method === "Page.javascriptDialogOpening") {
     store.dialogs.push({
       type: params.type,
@@ -178,7 +209,10 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 });
 
 chrome.debugger.onDetach.addListener((source) => {
-  if (source.tabId) attachedTabs.delete(source.tabId);
+  if (source.tabId) {
+    attachedTabs.delete(source.tabId);
+    tabMockRoutes.delete(source.tabId);
+  }
 });
 
 async function attachDebuggerIfNeeded(tabId) {
@@ -240,6 +274,57 @@ async function injectAgentVisualCue(tabId, cue) {
       func: (data) => {
         if (!document || !document.body) return;
 
+        // 1. Inject Hardware-Accelerated CSS Keyframes
+        if (!document.getElementById("__agent_hud_styles")) {
+          const styleTag = document.createElement("style");
+          styleTag.id = "__agent_hud_styles";
+          styleTag.textContent = `
+            @keyframes agentPulseGlow {
+              0%, 100% { box-shadow: 0 0 16px rgba(0, 229, 255, 0.8), inset 0 0 8px rgba(0, 229, 255, 0.4); }
+              50% { box-shadow: 0 0 28px rgba(0, 229, 255, 1), inset 0 0 14px rgba(0, 229, 255, 0.7); }
+            }
+            @keyframes agentChevronDown {
+              0% { transform: translateY(-8px); opacity: 0; }
+              50% { opacity: 1; }
+              100% { transform: translateY(10px); opacity: 0; }
+            }
+            @keyframes agentChevronUp {
+              0% { transform: translateY(8px); opacity: 0; }
+              50% { opacity: 1; }
+              100% { transform: translateY(-10px); opacity: 0; }
+            }
+            @keyframes agentNavProgress {
+              0% { width: 0%; opacity: 1; }
+              60% { width: 75%; opacity: 1; }
+              90% { width: 95%; opacity: 1; }
+              100% { width: 100%; opacity: 0; }
+            }
+            @keyframes agentKeycapBounce {
+              0% { transform: translate(-50%, 6px) scale(0.85); opacity: 0; }
+              25% { transform: translate(-50%, -3px) scale(1.08); opacity: 1; }
+              50% { transform: translate(-50%, 0) scale(1); opacity: 1; }
+              85% { transform: translate(-50%, 0) scale(1); opacity: 1; }
+              100% { transform: translate(-50%, -4px) scale(0.9); opacity: 0; }
+            }
+            @keyframes agentPerimeterFlash {
+              0% { opacity: 0; }
+              25% { opacity: 1; }
+              100% { opacity: 0; }
+            }
+            @keyframes agentCheckBloom {
+              0% { transform: scale(0.3); opacity: 0; }
+              40% { transform: scale(1.3); opacity: 1; }
+              70% { transform: scale(1); opacity: 1; }
+              100% { transform: scale(1.4); opacity: 0; }
+            }
+            @keyframes agentDragPulse {
+              0% { stroke-dashoffset: 40; }
+              100% { stroke-dashoffset: 0; }
+            }
+          `;
+          (document.head || document.documentElement).appendChild(styleTag);
+        }
+
         let cursor = document.getElementById("__agent_virtual_cursor");
         let label = document.getElementById("__agent_cursor_label");
         let overlay = document.getElementById("__agent_action_overlay");
@@ -256,7 +341,7 @@ async function injectAgentVisualCue(tabId, cue) {
             top: 20px;
             left: 20px;
             transform: translate(-3px, -3px);
-            transition: left 0.22s cubic-bezier(0.2, 0, 0, 1), top 0.22s cubic-bezier(0.2, 0, 0, 1), opacity 0.35s ease;
+            transition: left 0.22s cubic-bezier(0.2, 0, 0, 1), top 0.22s cubic-bezier(0.2, 0, 0, 1), transform 0.2s ease, opacity 0.35s ease;
             filter: drop-shadow(0 3px 10px rgba(0, 229, 255, 0.75));
             opacity: 0;
           `;
@@ -314,78 +399,226 @@ async function injectAgentVisualCue(tabId, cue) {
           }, 2400);
         }
 
-        // Click Ripple Shockwave
+        // 2. Click Shockwave Ripple & Cursor Bounce
         if (data.type === "click" && data.x !== undefined && data.y !== undefined) {
           const ripple = document.createElement("div");
           ripple.style.cssText = `
             position: fixed;
-            left: ${data.x - 18}px;
-            top: ${data.y - 18}px;
-            width: 36px;
-            height: 36px;
+            left: ${data.x - 20}px;
+            top: ${data.y - 20}px;
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
             border: 2px solid #00e5ff;
             background: rgba(0, 229, 255, 0.35);
             pointer-events: none;
             z-index: 2147483646;
-            transform: scale(0.3);
+            transform: scale(0.2);
             opacity: 1;
             transition: transform 0.45s cubic-bezier(0.1, 0.8, 0.2, 1), opacity 0.45s ease-out;
           `;
           document.body.appendChild(ripple);
           requestAnimationFrame(() => {
-            ripple.style.transform = "scale(2.6)";
+            ripple.style.transform = "scale(2.8)";
             ripple.style.opacity = "0";
           });
           setTimeout(() => ripple.remove(), 500);
 
-          // Cursor click bounce animation
+          // Click bounce animation
           cursor.style.transform = "translate(-3px, -3px) scale(0.85)";
           setTimeout(() => {
             cursor.style.transform = "translate(-3px, -3px) scale(1)";
           }, 150);
         }
 
-        // Scroll indicator banner
+        // 3. Cinematic Scroll Velocity Strip & Cursor Tilt Animation
         if (data.type === "scroll") {
-          let scrollBanner = document.getElementById("__agent_scroll_indicator");
-          if (!scrollBanner) {
-            scrollBanner = document.createElement("div");
-            scrollBanner.id = "__agent_scroll_indicator";
-            scrollBanner.style.cssText = `
+          const dir = data.direction || "down";
+          const isDown = dir === "down" || dir === "bottom";
+          const isUp = dir === "up" || dir === "top";
+
+          // Cursor Wheel Tilt simulation
+          if (cursor) {
+            cursor.style.opacity = "1";
+            cursor.style.transform = isDown
+              ? "translate(-3px, -3px) rotate(16deg) scale(0.95)"
+              : "translate(-3px, -3px) rotate(-16deg) scale(0.95)";
+            setTimeout(() => {
+              if (cursor) cursor.style.transform = "translate(-3px, -3px) rotate(0deg) scale(1)";
+            }, 350);
+          }
+
+          // Calculate scroll progress percentage
+          const curY = data.scrollY !== undefined ? data.scrollY : window.scrollY;
+          const maxScroll = Math.max(1, (document.documentElement.scrollHeight || document.body.scrollHeight) - window.innerHeight);
+          const scrollPct = Math.min(100, Math.max(0, Math.round((curY / maxScroll) * 100)));
+
+          // Scroll HUD capsule on right viewport margin
+          let scrollStrip = document.getElementById("__agent_scroll_strip");
+          if (!scrollStrip) {
+            scrollStrip = document.createElement("div");
+            scrollStrip.id = "__agent_scroll_strip";
+            scrollStrip.style.cssText = `
               position: fixed;
-              bottom: 24px;
               right: 24px;
+              top: 50%;
+              transform: translateY(-50%);
               z-index: 2147483647;
               pointer-events: none;
               background: rgba(15, 23, 42, 0.94);
-              color: #00e5ff;
-              border: 1px solid rgba(0, 229, 255, 0.6);
-              border-radius: 8px;
-              padding: 6px 14px;
-              font-size: 12px;
-              font-family: system-ui, sans-serif;
+              color: #f8fafc;
+              border: 1px solid rgba(0, 229, 255, 0.7);
+              border-radius: 12px;
+              padding: 12px 14px;
+              box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 16px rgba(0, 229, 255, 0.35);
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+              font-size: 11px;
               font-weight: 600;
-              box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 229, 255, 0.35);
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 8px;
               opacity: 0;
-              transition: opacity 0.2s ease, transform 0.2s ease;
-              transform: translateY(6px);
+              transition: opacity 0.25s ease, transform 0.25s ease;
             `;
-            document.body.appendChild(scrollBanner);
+            document.body.appendChild(scrollStrip);
           }
-          scrollBanner.innerHTML = `🤖 ${data.label}`;
-          scrollBanner.style.opacity = "1";
-          scrollBanner.style.transform = "translateY(0)";
+
+          const arrowAnimation = isDown ? "agentChevronDown 0.6s infinite ease-in-out" : "agentChevronUp 0.6s infinite ease-in-out";
+          const arrowSymbol = isDown ? "↓" : "↑";
+
+          scrollStrip.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 2px; color: #00e5ff; font-size: 14px;">
+              <span style="animation: ${arrowAnimation};">${arrowSymbol}</span>
+              <span style="animation: ${arrowAnimation}; animation-delay: 0.15s;">${arrowSymbol}</span>
+            </div>
+            <div style="width: 4px; height: 44px; background: rgba(255,255,255,0.12); border-radius: 2px; position: relative; overflow: hidden;">
+              <div style="position: absolute; width: 100%; top: 0; height: ${scrollPct}%; background: #00e5ff; box-shadow: 0 0 6px #00e5ff;"></div>
+            </div>
+            <div style="font-size: 10px; color: #38bdf8; font-weight: 700; white-space: nowrap;">
+              ${scrollPct}%
+            </div>
+            <div style="font-size: 11px; color: #cbd5e1; font-weight: 500; white-space: nowrap; margin-top: 2px;">
+              ${data.label || `Scroll ${dir}`}
+            </div>
+          `;
+
+          scrollStrip.style.opacity = "1";
+          scrollStrip.style.transform = "translateY(-50%) scale(1)";
+
           clearTimeout(window.__agentScrollTimeout);
           window.__agentScrollTimeout = setTimeout(() => {
-            if (scrollBanner) {
-              scrollBanner.style.opacity = "0";
-              scrollBanner.style.transform = "translateY(6px)";
+            if (scrollStrip) {
+              scrollStrip.style.opacity = "0";
+              scrollStrip.style.transform = "translateY(-50%) scale(0.95)";
             }
-          }, 1800);
+          }, 1500);
         }
 
-        // Target Element Highlight Ring
+        // 4. Keyboard Keycap HUD Animation
+        if (data.type === "key" && data.key) {
+          const keycap = document.createElement("div");
+          keycap.style.cssText = `
+            position: fixed;
+            left: ${data.x !== undefined ? data.x : window.innerWidth / 2}px;
+            top: ${data.y !== undefined ? data.y - 45 : window.innerHeight / 2}px;
+            z-index: 2147483647;
+            pointer-events: none;
+            background: linear-gradient(180deg, #1e293b, #0f172a);
+            color: #00e5ff;
+            border: 1px solid rgba(0, 229, 255, 0.8);
+            border-bottom: 3px solid #00e5ff;
+            border-radius: 8px;
+            padding: 6px 14px;
+            font-size: 13px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Mono', Consolas, monospace;
+            font-weight: 700;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7), 0 0 16px rgba(0, 229, 255, 0.5);
+            animation: agentKeycapBounce 0.85s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          `;
+          const keyLabels = {
+            Enter: "↵ Enter",
+            Tab: "⇥ Tab",
+            Escape: "⎋ Esc",
+            Backspace: "⌫ Backspace",
+            ArrowDown: "↓ Down",
+            ArrowUp: "↑ Up",
+            ArrowLeft: "← Left",
+            ArrowRight: "→ Right",
+            Space: "␣ Space",
+          };
+          keycap.innerHTML = `⌨️ ${keyLabels[data.key] || data.key}`;
+          document.body.appendChild(keycap);
+          setTimeout(() => keycap.remove(), 900);
+        }
+
+        // 5. Navigation Neon Laser Streamer
+        if (data.type === "navigate") {
+          let navBeam = document.getElementById("__agent_nav_beam");
+          if (!navBeam) {
+            navBeam = document.createElement("div");
+            navBeam.id = "__agent_nav_beam";
+            navBeam.style.cssText = `
+              position: fixed;
+              top: 0;
+              left: 0;
+              height: 3px;
+              width: 0%;
+              z-index: 2147483647;
+              pointer-events: none;
+              background: linear-gradient(90deg, #00e5ff, #38bdf8, #818cf8);
+              box-shadow: 0 0 14px #00e5ff, 0 0 6px #38bdf8;
+              animation: agentNavProgress 0.85s ease-out forwards;
+            `;
+            document.body.appendChild(navBeam);
+            setTimeout(() => navBeam.remove(), 900);
+          }
+        }
+
+        // 6. Tab Focus Perimeter Flash
+        if (data.type === "tab_focus") {
+          const flash = document.createElement("div");
+          flash.style.cssText = `
+            position: fixed;
+            inset: 0;
+            z-index: 2147483646;
+            pointer-events: none;
+            box-shadow: inset 0 0 40px rgba(0, 229, 255, 0.5), inset 0 0 12px #00e5ff;
+            animation: agentPerimeterFlash 0.6s ease-out forwards;
+          `;
+          document.body.appendChild(flash);
+          setTimeout(() => flash.remove(), 650);
+        }
+
+        // 7. Checkbox & Radio Bloom
+        if (data.type === "check" && data.x !== undefined && data.y !== undefined) {
+          const checkBloom = document.createElement("div");
+          checkBloom.style.cssText = `
+            position: fixed;
+            left: ${data.x - 16}px;
+            top: ${data.y - 16}px;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: rgba(16, 185, 129, 0.35);
+            border: 2px solid #10b981;
+            color: #10b981;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            font-weight: bold;
+            z-index: 2147483647;
+            pointer-events: none;
+            box-shadow: 0 0 14px rgba(16, 185, 129, 0.6);
+            animation: agentCheckBloom 0.6s ease-out forwards;
+          `;
+          checkBloom.innerHTML = data.checked ? "✓" : "✕";
+          document.body.appendChild(checkBloom);
+          setTimeout(() => checkBloom.remove(), 650);
+        }
+
+        // 8. Target Element Highlight Ring & Typing Pulse
         if (data.rect) {
           if (!overlay) {
             overlay = document.createElement("div");
@@ -407,14 +640,38 @@ async function injectAgentVisualCue(tabId, cue) {
           overlay.style.width = `${data.rect.width + 8}px`;
           overlay.style.height = `${data.rect.height + 8}px`;
           overlay.style.opacity = "1";
+
+          if (data.type === "type") {
+            overlay.style.animation = "agentPulseGlow 1.2s infinite ease-in-out";
+          } else {
+            overlay.style.animation = "none";
+          }
+
           clearTimeout(window.__agentOverlayTimeout);
           window.__agentOverlayTimeout = setTimeout(() => {
             if (overlay) overlay.style.opacity = "0";
           }, 1800);
         }
 
-        // Drag trajectory
+        // 9. Animated Laser Drag Path
         if (data.type === "drag" && data.from && data.to) {
+          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.style.cssText = `
+            position: fixed;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 2147483646;
+            pointer-events: none;
+          `;
+          svg.innerHTML = `
+            <line x1="${data.from.x}" y1="${data.from.y}" x2="${data.to.x}" y2="${data.to.y}"
+              stroke="#00e5ff" stroke-width="2.5" stroke-dasharray="6 4" style="animation: agentDragPulse 0.5s linear infinite; filter: drop-shadow(0 0 8px #00e5ff);" />
+            <circle cx="${data.to.x}" cy="${data.to.y}" r="6" fill="#00e5ff" style="filter: drop-shadow(0 0 10px #00e5ff);" />
+          `;
+          document.body.appendChild(svg);
+          setTimeout(() => svg.remove(), 700);
+
           cursor.style.left = `${data.from.x}px`;
           cursor.style.top = `${data.from.y}px`;
           cursor.style.opacity = "1";
@@ -564,6 +821,10 @@ async function handleRpc(action, params = {}) {
       if (tab.windowId) {
         await chrome.windows.update(tab.windowId, { focused: true });
       }
+      await injectAgentVisualCue(params.tabId, {
+        type: "tab_focus",
+        label: "Tab Focused",
+      });
       return { success: true, tabId: params.tabId, active: true };
     }
 
@@ -600,6 +861,11 @@ async function handleRpc(action, params = {}) {
         await waitForTabReady(targetTabId, params.waitFor, params.timeoutMs || 15000);
       }
 
+      await injectAgentVisualCue(targetTabId, {
+        type: "navigate",
+        label: `Navigating: ${params.url}`,
+      });
+
       return { success: true, navigated: true, tabId: targetTabId, id: targetTabId, url: params.url };
     }
 
@@ -613,6 +879,10 @@ async function handleRpc(action, params = {}) {
           func: () => window.history.back(),
         });
       }
+      await injectAgentVisualCue(params.tabId, {
+        type: "navigate",
+        label: "Navigating Back",
+      });
       return { success: true, tabId: params.tabId, navigated: "back" };
     }
 
@@ -626,6 +896,10 @@ async function handleRpc(action, params = {}) {
           func: () => window.history.forward(),
         });
       }
+      await injectAgentVisualCue(params.tabId, {
+        type: "navigate",
+        label: "Navigating Forward",
+      });
       return { success: true, tabId: params.tabId, navigated: "forward" };
     }
 
@@ -731,7 +1005,11 @@ async function handleRpc(action, params = {}) {
       });
       await injectAgentVisualCue(params.tabId, {
         type: "scroll",
-        label: `Scroll ${params.direction || "down"} (${params.distance ?? 500}px)`,
+        direction: result.direction,
+        distance: result.distance,
+        scrollY: result.scrollY,
+        pageHeight: result.pageHeight,
+        label: `Scroll ${result.direction || "down"} (${result.distance ?? 500}px)`,
       });
       return { success: true, tabId: params.tabId, ...result };
     }
@@ -741,6 +1019,10 @@ async function handleRpc(action, params = {}) {
       await attachDebuggerIfNeeded(params.tabId);
       await chrome.debugger.sendCommand({ tabId: params.tabId }, "Page.reload", {
         ignoreCache: params.ignoreCache ?? false,
+      });
+      await injectAgentVisualCue(params.tabId, {
+        type: "navigate",
+        label: "Reloading Page",
       });
       return { success: true, tabId: params.tabId, reloaded: true };
     }
@@ -977,6 +1259,373 @@ async function handleRpc(action, params = {}) {
         },
       });
       return result;
+    }
+
+    case "get_markdown": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: params.tabId },
+        args: [
+          params.selector || null,
+          params.includeLinks ?? true,
+          params.includeImages ?? false,
+          params.maxLength ?? 50000,
+        ],
+        func: (selector, includeLinks, includeImages, maxLength) => {
+          let root = null;
+          if (selector) {
+            root = document.querySelector(selector);
+          }
+          if (!root) {
+            root = document.querySelector("article, main, [role='main'], #content, .content, #main, .main, body") || document.body;
+          }
+          if (!root) return { error: "No root content found on page." };
+
+          const clone = root.cloneNode(true);
+          const removeSelectors = [
+            "script", "style", "noscript", "svg", "iframe", "canvas",
+            "nav", "header", "footer", ".nav", ".navbar", ".menu", ".footer",
+            ".sidebar", "#sidebar", ".advertisement", ".ad", ".ads",
+            "[aria-hidden='true']", "#__agent_virtual_cursor", "#__agent_action_overlay",
+            "#__agent_scroll_indicator", "#__agent_takeover_banner"
+          ];
+          if (clone.tagName && clone.tagName.toLowerCase() === "body") {
+            for (const sel of removeSelectors) {
+              clone.querySelectorAll(sel).forEach((el) => el.remove());
+            }
+          } else {
+            clone.querySelectorAll("script, style, noscript, svg, iframe").forEach((el) => el.remove());
+          }
+
+          function nodeToMd(node) {
+            if (node.nodeType === Node.TEXT_NODE) {
+              return node.nodeValue.replace(/\s+/g, " ");
+            }
+            if (node.nodeType !== Node.ELEMENT_NODE) return "";
+
+            const tag = node.tagName.toLowerCase();
+            const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+            if (style && (style.display === "none" || style.visibility === "hidden")) return "";
+
+            let inner = "";
+            for (const child of node.childNodes) {
+              inner += nodeToMd(child);
+            }
+            inner = inner.trim();
+
+            switch (tag) {
+              case "h1": return `\n\n# ${inner}\n\n`;
+              case "h2": return `\n\n## ${inner}\n\n`;
+              case "h3": return `\n\n### ${inner}\n\n`;
+              case "h4": return `\n\n#### ${inner}\n\n`;
+              case "h5": return `\n\n##### ${inner}\n\n`;
+              case "h6": return `\n\n###### ${inner}\n\n`;
+              case "p": return `\n\n${inner}\n\n`;
+              case "blockquote": return `\n\n> ${inner.replace(/\n/g, "\n> ")}\n\n`;
+              case "hr": return `\n\n---\n\n`;
+              case "br": return `\n`;
+              case "b":
+              case "strong": return inner ? `**${inner}**` : "";
+              case "i":
+              case "em": return inner ? `*${inner}*` : "";
+              case "code":
+                if (node.parentElement && node.parentElement.tagName.toLowerCase() === "pre") {
+                  return inner;
+                }
+                return inner ? `\`${inner}\`` : "";
+              case "pre": {
+                const lang = node.className || "";
+                return `\n\n\`\`\`${lang}\n${inner}\n\`\`\`\n\n`;
+              }
+              case "ul": return `\n\n${inner}\n\n`;
+              case "ol": return `\n\n${inner}\n\n`;
+              case "li": {
+                const isOrdered = node.parentElement && node.parentElement.tagName.toLowerCase() === "ol";
+                const bullet = isOrdered ? "1. " : "* ";
+                return `\n${bullet}${inner}`;
+              }
+              case "a": {
+                const href = node.getAttribute("href");
+                if (includeLinks && href && href !== "#" && !href.startsWith("javascript:")) {
+                  try {
+                    const absoluteUrl = new URL(href, location.href).href;
+                    return inner ? `[${inner}](${absoluteUrl})` : "";
+                  } catch {
+                    return inner ? `[${inner}](${href})` : "";
+                  }
+                }
+                return inner;
+              }
+              case "img": {
+                if (!includeImages) return "";
+                const src = node.getAttribute("src");
+                const alt = node.getAttribute("alt") || "image";
+                if (src) {
+                  try {
+                    const absoluteSrc = new URL(src, location.href).href;
+                    return `![${alt}](${absoluteSrc})`;
+                  } catch {
+                    return `![${alt}](${src})`;
+                  }
+                }
+                return "";
+              }
+              case "table": {
+                const rows = Array.from(node.querySelectorAll("tr"));
+                if (!rows.length) return "";
+                let mdTable = "\n\n";
+                let colCount = 0;
+                rows.forEach((row, rIdx) => {
+                  const cells = Array.from(row.querySelectorAll("th, td"));
+                  if (!colCount) colCount = cells.length;
+                  const cellTexts = cells.map((c) => c.textContent.trim().replace(/\|/g, "\\|").replace(/\n/g, " "));
+                  mdTable += `| ${cellTexts.join(" | ")} |\n`;
+                  if (rIdx === 0) {
+                    mdTable += `| ${cells.map(() => "---").join(" | ")} |\n`;
+                  }
+                });
+                return mdTable + "\n\n";
+              }
+              default: {
+                const isBlock = ["div", "section", "article", "main", "aside"].includes(tag);
+                return isBlock ? `\n\n${inner}\n\n` : ` ${inner} `;
+              }
+            }
+          }
+
+          let md = nodeToMd(clone);
+          md = md.replace(/\n{3,}/g, "\n\n").trim();
+          let truncated = false;
+          if (maxLength && md.length > maxLength) {
+            md = md.slice(0, maxLength) + `\n\n... [Truncated: ${md.length - maxLength} more characters]`;
+            truncated = true;
+          }
+
+          const wordCount = md.split(/\s+/).filter(Boolean).length;
+          return {
+            title: document.title,
+            url: location.href,
+            markdown: md,
+            characterCount: md.length,
+            wordCount,
+            truncated,
+          };
+        },
+      });
+
+      await injectAgentVisualCue(params.tabId, {
+        label: `Markdown Extracted (${result.wordCount} words)`,
+      });
+
+      return { success: true, tabId: params.tabId, ...result };
+    }
+
+    case "extract_table": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: params.tabId },
+        args: [params.target || null, params.format || "json"],
+        func: (target, format) => {
+          let tableElements = [];
+          if (target) {
+            if (typeof target === "string" && target.startsWith("ref_")) {
+              const el = document.querySelector(`[data-agent-ref="${target}"]`);
+              if (el) tableElements = el.tagName.toLowerCase() === "table" ? [el] : Array.from(el.querySelectorAll("table"));
+            } else {
+              const el = document.querySelector(target);
+              if (el) tableElements = el.tagName.toLowerCase() === "table" ? [el] : Array.from(el.querySelectorAll("table"));
+            }
+          }
+          if (!tableElements.length) {
+            tableElements = Array.from(document.querySelectorAll("table, [role='table'], [role='grid']"));
+          }
+
+          if (!tableElements.length) {
+            return { count: 0, tables: [], message: "No tables found on page." };
+          }
+
+          const results = [];
+          tableElements.forEach((tbl, tblIdx) => {
+            const rows = Array.from(tbl.querySelectorAll("tr"));
+            if (!rows.length) return;
+
+            let headerCells = Array.from(rows[0].querySelectorAll("th"));
+            let dataRowStart = 1;
+            if (!headerCells.length) {
+              headerCells = Array.from(rows[0].querySelectorAll("td"));
+              dataRowStart = 1;
+            }
+
+            const headers = headerCells.map((c, i) => c.textContent.trim().replace(/\s+/g, " ") || `col_${i + 1}`);
+
+            const parsedRows = [];
+            for (let r = dataRowStart; r < rows.length; r++) {
+              const cells = Array.from(rows[r].querySelectorAll("th, td"));
+              if (!cells.length) continue;
+              const rowObj = {};
+              const rowArr = [];
+              cells.forEach((cell, cIdx) => {
+                const key = headers[cIdx] || `col_${cIdx + 1}`;
+                const text = cell.textContent.trim().replace(/\s+/g, " ");
+                const link = cell.querySelector("a[href]");
+                const val = link ? { text, href: link.href } : text;
+                rowObj[key] = val;
+                rowArr.push(text);
+              });
+              parsedRows.push({ obj: rowObj, raw: rowArr });
+            }
+
+            let formattedOutput = null;
+            if (format === "csv") {
+              const escapeCsv = (val) => {
+                const s = typeof val === "object" ? val.text : String(val);
+                return `"${s.replace(/"/g, '""')}"`;
+              };
+              const csvLines = [headers.map(escapeCsv).join(",")];
+              parsedRows.forEach((r) => {
+                csvLines.push(headers.map((h) => escapeCsv(r.obj[h] || "")).join(","));
+              });
+              formattedOutput = csvLines.join("\n");
+            } else if (format === "markdown") {
+              let md = `| ${headers.join(" | ")} |\n| ${headers.map(() => "---").join(" | ")} |\n`;
+              parsedRows.forEach((r) => {
+                md += `| ${headers.map((h) => (typeof r.obj[h] === "object" ? r.obj[h].text : r.obj[h] || "").replace(/\|/g, "\\|")).join(" | ")} |\n`;
+              });
+              formattedOutput = md;
+            } else {
+              formattedOutput = parsedRows.map((r) => r.obj);
+            }
+
+            results.push({
+              index: tblIdx,
+              id: tbl.id || null,
+              caption: tbl.querySelector("caption")?.textContent.trim() || null,
+              headers,
+              rowCount: parsedRows.length,
+              data: formattedOutput,
+            });
+          });
+
+          return { count: results.length, tables: results };
+        },
+      });
+
+      await injectAgentVisualCue(params.tabId, {
+        label: `Table Extracted (${result.count} table${result.count === 1 ? "" : "s"})`,
+      });
+
+      return { success: true, tabId: params.tabId, ...result };
+    }
+
+    case "find_in_page": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      if (!params.query) throw new Error("Missing required query parameter");
+
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: params.tabId },
+        args: [
+          params.query,
+          params.caseSensitive ?? false,
+          params.scrollToIndex !== undefined ? Number(params.scrollToIndex) : null,
+        ],
+        func: (query, caseSensitive, scrollToIndex) => {
+          if (!query) return { totalMatches: 0, matches: [] };
+
+          const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT,
+            {
+              acceptNode: (node) => {
+                if (!node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+                const parent = node.parentElement;
+                if (!parent) return NodeFilter.FILTER_REJECT;
+                const tag = parent.tagName.toLowerCase();
+                if (["script", "style", "noscript"].includes(tag)) return NodeFilter.FILTER_REJECT;
+                if (parent.id && parent.id.startsWith("__agent_")) return NodeFilter.FILTER_REJECT;
+                const style = window.getComputedStyle(parent);
+                if (style && (style.display === "none" || style.visibility === "hidden")) return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
+              },
+            }
+          );
+
+          const q = caseSensitive ? query : query.toLowerCase();
+          const matches = [];
+
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const text = node.nodeValue;
+            const cmp = caseSensitive ? text : text.toLowerCase();
+            let idx = cmp.indexOf(q);
+
+            while (idx !== -1) {
+              try {
+                const range = document.createRange();
+                range.setStart(node, idx);
+                range.setEnd(node, idx + query.length);
+                const rect = range.getBoundingClientRect();
+
+                const snippetStart = Math.max(0, idx - 25);
+                const snippetEnd = Math.min(text.length, idx + query.length + 25);
+                const snippet =
+                  (snippetStart > 0 ? "..." : "") +
+                  text.slice(snippetStart, snippetEnd).trim() +
+                  (snippetEnd < text.length ? "..." : "");
+
+                matches.push({
+                  index: matches.length,
+                  snippet,
+                  rect: {
+                    x: Math.round(rect.x),
+                    y: Math.round(rect.y),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                  },
+                  x: Math.round(rect.left + rect.width / 2),
+                  y: Math.round(rect.top + rect.height / 2),
+                  tagName: node.parentElement ? node.parentElement.tagName.toLowerCase() : "text",
+                });
+              } catch {}
+
+              idx = cmp.indexOf(q, idx + query.length);
+            }
+          }
+
+          let scrolledMatch = null;
+          if (scrollToIndex !== null && matches[scrollToIndex]) {
+            scrolledMatch = matches[scrollToIndex];
+            window.scrollTo({
+              top: Math.max(0, window.scrollY + scrolledMatch.rect.y - window.innerHeight / 2),
+              behavior: "smooth",
+            });
+          }
+
+          return {
+            query,
+            totalMatches: matches.length,
+            matches: matches.slice(0, 50),
+            scrolledTo: scrolledMatch ? scrollToIndex : null,
+            scrolledTarget: scrolledMatch || null,
+          };
+        },
+      });
+
+      if (result.scrolledTarget) {
+        await injectAgentVisualCue(params.tabId, {
+          type: "click",
+          x: result.scrolledTarget.x,
+          y: result.scrolledTarget.y,
+          rect: result.scrolledTarget.rect,
+          label: `Found "${params.query}" (${result.totalMatches} matches)`,
+        });
+      } else {
+        await injectAgentVisualCue(params.tabId, {
+          type: "scroll",
+          label: `Find "${params.query}": ${result.totalMatches} matches`,
+        });
+      }
+
+      return { success: true, tabId: params.tabId, ...result };
     }
 
     case "wait_for": {
@@ -1279,7 +1928,8 @@ async function handleRpc(action, params = {}) {
       const code = params.code || (key.length === 1 ? `Key${key.toUpperCase()}` : key);
 
       await injectAgentVisualCue(params.tabId, {
-        type: "type",
+        type: "key",
+        key,
         label: `Key: ${key}`,
       });
 
@@ -1389,6 +2039,219 @@ async function handleRpc(action, params = {}) {
         }
       }
       return { success: true, handled: true, activeDialog, action: params.action, promptText: params.promptText };
+    }
+
+    case "select_option": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const target = params.target || params.ref;
+      if (!target) throw new Error("Missing required target or ref parameter");
+
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: params.tabId },
+        args: [target, params.value, params.label, params.index],
+        func: (targetSel, val, lbl, idx) => {
+          function findEl(root, sel) {
+            try {
+              if (typeof sel === "string" && (sel.startsWith("ref_") || sel.startsWith("ref-"))) {
+                const el = root.querySelector(`[data-agent-ref="${sel}"]`);
+                if (el) return el;
+              }
+              const direct = root.querySelector(sel);
+              if (direct) return direct;
+              const all = root.querySelectorAll("*");
+              for (const node of all) {
+                if (node.shadowRoot) {
+                  const found = findEl(node.shadowRoot, sel);
+                  if (found) return found;
+                }
+                if (node.tagName && node.tagName.toLowerCase() === "iframe") {
+                  try {
+                    const found = findEl(node.contentDocument, sel);
+                    if (found) return found;
+                  } catch {}
+                }
+              }
+            } catch {}
+            return null;
+          }
+
+          let el = findEl(document, targetSel);
+          if (!el) return { error: `Element "${targetSel}" not found.` };
+          if (el.tagName.toLowerCase() !== "select") {
+            const nested = el.querySelector("select");
+            if (nested) el = nested;
+            else return { error: `Element is not a <select> element (found <${el.tagName.toLowerCase()}>)` };
+          }
+
+          const options = Array.from(el.options);
+          let matchedIdx = -1;
+
+          if (val !== undefined && val !== null) {
+            matchedIdx = options.findIndex((o) => o.value === String(val));
+          }
+          if (matchedIdx === -1 && lbl !== undefined && lbl !== null) {
+            const queryLbl = String(lbl).trim().toLowerCase();
+            matchedIdx = options.findIndex((o) => o.text.trim().toLowerCase() === queryLbl);
+            if (matchedIdx === -1) {
+              matchedIdx = options.findIndex((o) => o.text.trim().toLowerCase().includes(queryLbl));
+            }
+          }
+          if (matchedIdx === -1 && idx !== undefined && idx !== null) {
+            const num = Number(idx);
+            if (num >= 0 && num < options.length) matchedIdx = num;
+          }
+
+          if (matchedIdx === -1) {
+            return {
+              error: `No matching option found for value="${val}", label="${lbl}", index=${idx}`,
+              availableOptions: options.map((o, i) => ({ index: i, value: o.value, text: o.text.trim() })),
+            };
+          }
+
+          el.selectedIndex = matchedIdx;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          const rect = el.getBoundingClientRect();
+
+          return {
+            success: true,
+            selectedIndex: matchedIdx,
+            value: options[matchedIdx].value,
+            text: options[matchedIdx].text.trim(),
+            totalOptions: options.length,
+            rect: {
+              x: Math.round(rect.x),
+              y: Math.round(rect.y),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+            },
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+          };
+        },
+      });
+
+      if (result.error) throw new Error(result.error);
+
+      await injectAgentVisualCue(params.tabId, {
+        type: "click",
+        x: result.x,
+        y: result.y,
+        rect: result.rect,
+        label: `Selected: "${result.text}"`,
+      });
+
+      return { success: true, tabId: params.tabId, target, ...result };
+    }
+
+    case "set_checked": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const target = params.target || params.ref;
+      if (!target) throw new Error("Missing required target or ref parameter");
+      if (params.checked === undefined) throw new Error("Missing required checked (boolean) parameter");
+
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: params.tabId },
+        args: [target, Boolean(params.checked)],
+        func: (targetSel, shouldCheck) => {
+          function findEl(root, sel) {
+            try {
+              if (typeof sel === "string" && (sel.startsWith("ref_") || sel.startsWith("ref-"))) {
+                const el = root.querySelector(`[data-agent-ref="${sel}"]`);
+                if (el) return el;
+              }
+              const direct = root.querySelector(sel);
+              if (direct) return direct;
+              const all = root.querySelectorAll("*");
+              for (const node of all) {
+                if (node.shadowRoot) {
+                  const found = findEl(node.shadowRoot, sel);
+                  if (found) return found;
+                }
+                if (node.tagName && node.tagName.toLowerCase() === "iframe") {
+                  try {
+                    const found = findEl(node.contentDocument, sel);
+                    if (found) return found;
+                  } catch {}
+                }
+              }
+            } catch {}
+            return null;
+          }
+
+          let el = findEl(document, targetSel);
+          if (!el) return { error: `Element "${targetSel}" not found.` };
+          if (!("checked" in el)) {
+            const nested = el.querySelector("input[type='checkbox'], input[type='radio']");
+            if (nested) el = nested;
+            else return { error: `Element does not support checked state (<${el.tagName.toLowerCase()}>)` };
+          }
+
+          const prev = el.checked;
+          el.checked = shouldCheck;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          const rect = el.getBoundingClientRect();
+
+          return {
+            success: true,
+            checked: el.checked,
+            previousState: prev,
+            changed: prev !== el.checked,
+            type: el.type || "checkbox",
+            rect: {
+              x: Math.round(rect.x),
+              y: Math.round(rect.y),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+            },
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+          };
+        },
+      });
+
+      if (result.error) throw new Error(result.error);
+
+      await injectAgentVisualCue(params.tabId, {
+        type: "check",
+        checked: result.checked,
+        x: result.x,
+        y: result.y,
+        rect: result.rect,
+        label: `${result.checked ? "Checked" : "Unchecked"} ${result.type}`,
+      });
+
+      return { success: true, tabId: params.tabId, target, ...result };
+    }
+
+    case "download_file": {
+      if (!params.url) throw new Error("Missing required url parameter");
+      const options = {
+        url: params.url,
+        conflictAction: params.conflictAction || "uniquify",
+        saveAs: params.saveAs ?? false,
+      };
+      if (params.filename) options.filename = params.filename;
+
+      const downloadId = await chrome.downloads.download(options);
+
+      if (params.tabId) {
+        await injectAgentVisualCue(params.tabId, {
+          label: `Downloading: ${params.filename || "file"}`,
+        });
+      }
+
+      return {
+        success: true,
+        downloadId,
+        url: params.url,
+        filename: params.filename || null,
+      };
     }
 
     // -------------------------------------------------------------------------
@@ -2018,6 +2881,246 @@ async function handleRpc(action, params = {}) {
         color: color || undefined,
         collapsed: updateData.collapsed ?? false,
       };
+    }
+
+    case "block_urls": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      await attachDebuggerIfNeeded(params.tabId);
+      const patterns = params.clear
+        ? []
+        : Array.isArray(params.patterns)
+        ? params.patterns
+        : [params.patterns].filter(Boolean);
+      await chrome.debugger.sendCommand({ tabId: params.tabId }, "Network.setBlockedURLs", {
+        urls: patterns,
+      });
+      return { success: true, tabId: params.tabId, blockedPatterns: patterns, count: patterns.length };
+    }
+
+    case "set_extra_headers": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      await attachDebuggerIfNeeded(params.tabId);
+      const headers = params.clear ? {} : params.headers || {};
+      await chrome.debugger.sendCommand({ tabId: params.tabId }, "Network.setExtraHTTPHeaders", {
+        headers,
+      });
+      return { success: true, tabId: params.tabId, headers, count: Object.keys(headers).length };
+    }
+
+    case "mock_route": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      await attachDebuggerIfNeeded(params.tabId);
+      if (params.clear) {
+        tabMockRoutes.delete(params.tabId);
+        try {
+          await chrome.debugger.sendCommand({ tabId: params.tabId }, "Fetch.disable");
+        } catch {}
+        return { success: true, tabId: params.tabId, cleared: true };
+      }
+
+      if (!params.urlPattern) throw new Error("Missing required urlPattern parameter");
+
+      let bodyStr = "";
+      if (typeof params.responseBody === "object") {
+        bodyStr = JSON.stringify(params.responseBody);
+      } else {
+        bodyStr = String(params.responseBody || "");
+      }
+      const bodyBase64 = btoa(unescape(encodeURIComponent(bodyStr)));
+
+      const current = tabMockRoutes.get(params.tabId) || [];
+      current.push({
+        urlPattern: params.urlPattern,
+        status: params.status || 200,
+        headers: params.headers || {},
+        bodyBase64,
+      });
+      tabMockRoutes.set(params.tabId, current);
+
+      await chrome.debugger.sendCommand({ tabId: params.tabId }, "Fetch.enable", {
+        patterns: [{ urlPattern: "*", requestStage: "Request" }],
+      });
+
+      return {
+        success: true,
+        tabId: params.tabId,
+        urlPattern: params.urlPattern,
+        status: params.status || 200,
+        totalMocks: current.length,
+      };
+    }
+
+    case "search_bookmarks": {
+      const query = params.query || "";
+      const results = await chrome.bookmarks.search(query);
+      return { success: true, query, count: results.length, bookmarks: results.slice(0, params.limit || 50) };
+    }
+
+    case "add_bookmark": {
+      if (!params.title || !params.url) throw new Error("Missing required title and url parameters");
+      const bookmark = await chrome.bookmarks.create({
+        title: params.title,
+        url: params.url,
+        parentId: params.parentId || undefined,
+      });
+      return { success: true, bookmark };
+    }
+
+    case "search_history": {
+      const text = params.query || "";
+      const maxResults = params.limit || 50;
+      const startTime = params.startTime ? Number(params.startTime) : Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const items = await chrome.history.search({
+        text,
+        startTime,
+        maxResults,
+      });
+      return { success: true, query: text, count: items.length, history: items };
+    }
+
+    case "show_notification": {
+      const notifId = "agent_notif_" + Date.now();
+      await chrome.notifications.create(notifId, {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("icons/icon48.png"),
+        title: params.title || "Agent Bridge MCP",
+        message: params.message || "Task completed.",
+        priority: 2,
+      });
+      return { success: true, notificationId: notifId, title: params.title, message: params.message };
+    }
+
+    case "media_control": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const action = params.action || "toggle";
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: params.tabId },
+        args: [action, params.value],
+        func: (act, val) => {
+          const media = document.querySelector("video, audio");
+          if (!media) return { error: "No <video> or <audio> element found on page." };
+
+          if (act === "play") media.play();
+          else if (act === "pause") media.pause();
+          else if (act === "toggle") {
+            if (media.paused) media.play();
+            else media.pause();
+          } else if (act === "mute") media.muted = true;
+          else if (act === "unmute") media.muted = false;
+          else if (act === "seek" && val !== undefined) media.currentTime = Number(val);
+          else if (act === "set_volume" && val !== undefined) media.volume = Math.max(0, Math.min(1, Number(val)));
+          else if (act === "set_speed" && val !== undefined) media.playbackRate = Math.max(0.25, Math.min(4, Number(val)));
+
+          return {
+            success: true,
+            action: act,
+            paused: media.paused,
+            currentTime: Math.round(media.currentTime),
+            duration: Math.round(media.duration || 0),
+            muted: media.muted,
+            volume: media.volume,
+            playbackRate: media.playbackRate,
+          };
+        },
+      });
+
+      if (result.error) throw new Error(result.error);
+
+      await injectAgentVisualCue(params.tabId, {
+        label: `Media ${action}: ${result.paused ? "Paused" : "Playing"} (${result.currentTime}s)`,
+      });
+
+      return { success: true, tabId: params.tabId, ...result };
+    }
+
+    case "mute_tab": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const muted = Boolean(params.muted);
+      await chrome.tabs.update(params.tabId, { muted });
+      return { success: true, tabId: params.tabId, muted };
+    }
+
+    case "get_subtitles": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: params.tabId },
+        func: () => {
+          const texts = [];
+          document.querySelectorAll(".ytp-caption-segment").forEach((el) => texts.push(el.textContent.trim()));
+          document.querySelectorAll("video").forEach((v) => {
+            if (v.textTracks) {
+              for (let i = 0; i < v.textTracks.length; i++) {
+                const track = v.textTracks[i];
+                if (track.activeCues) {
+                  for (let c = 0; c < track.activeCues.length; c++) {
+                    texts.push(track.activeCues[c].text);
+                  }
+                }
+              }
+            }
+          });
+          document.querySelectorAll("[class*='caption'], [class*='subtitle']").forEach((el) => {
+            const t = el.textContent.trim();
+            if (t && t.length < 200 && !texts.includes(t)) texts.push(t);
+          });
+          return { count: texts.length, subtitles: texts };
+        },
+      });
+      return { success: true, tabId: params.tabId, ...result };
+    }
+
+    case "duplicate_tab": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const tab = await chrome.tabs.duplicate(params.tabId);
+      return { success: true, tabId: tab.id, originalTabId: params.tabId, url: tab.url };
+    }
+
+    case "pin_tab": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      const pinned = Boolean(params.pinned);
+      await chrome.tabs.update(params.tabId, { pinned });
+      return { success: true, tabId: params.tabId, pinned };
+    }
+
+    case "set_zoom": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      if (params.zoomFactor !== undefined) {
+        await chrome.tabs.setZoom(params.tabId, Number(params.zoomFactor));
+      }
+      const currentZoom = await chrome.tabs.getZoom(params.tabId);
+      return { success: true, tabId: params.tabId, zoomFactor: currentZoom };
+    }
+
+    case "emulate_timezone": {
+      if (!params.tabId) throw new Error("Missing required tabId parameter");
+      if (!params.timezoneId) throw new Error("Missing required timezoneId parameter (e.g. 'America/New_York')");
+      let cdpSuccess = false;
+      try {
+        await attachDebuggerIfNeeded(params.tabId);
+        await chrome.debugger.sendCommand({ tabId: params.tabId }, "Emulation.setTimezoneOverride", {
+          timezoneId: params.timezoneId,
+        });
+        cdpSuccess = true;
+      } catch {
+        // Fall back to script-level Intl.DateTimeFormat override
+        await chrome.scripting.executeScript({
+          target: { tabId: params.tabId },
+          args: [params.timezoneId],
+          func: (tz) => {
+            try {
+              const OrigDateTimeFormat = Intl.DateTimeFormat;
+              Intl.DateTimeFormat = function (...args) {
+                const instance = new OrigDateTimeFormat(...args);
+                const origResolved = instance.resolvedOptions.bind(instance);
+                instance.resolvedOptions = () => Object.assign(origResolved(), { timeZone: tz });
+                return instance;
+              };
+              window.__emulatedTimezone = tz;
+            } catch {}
+          },
+        });
+      }
+      return { success: true, tabId: params.tabId, timezoneId: params.timezoneId, mode: cdpSuccess ? "cdp" : "dom_emulation" };
     }
 
     case "reload_extension": {
