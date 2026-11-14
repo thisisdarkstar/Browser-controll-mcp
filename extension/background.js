@@ -1692,7 +1692,7 @@ async function handleRpc(action, params = {}) {
         rect,
         label: params.actionType === "type" && params.text
           ? `Type: "${params.text}"`
-          : (target ? `Click ${target}` : `Click (${x}, ${y})`),
+          : "Click",
       });
 
       await attachDebuggerIfNeeded(params.tabId);
@@ -1783,7 +1783,7 @@ async function handleRpc(action, params = {}) {
           x,
           y,
           rect,
-          label: params.target ? `Hover ${params.target}` : `Hover (${x}, ${y})`,
+          label: "Hover",
         });
       }
       await attachDebuggerIfNeeded(params.tabId);
@@ -1818,7 +1818,7 @@ async function handleRpc(action, params = {}) {
         type: "drag",
         from: { x: fromX, y: fromY },
         to: { x: toX, y: toY },
-        label: `Drag to (${toX}, ${toY})`,
+        label: "Drag & Drop",
       });
 
       await attachDebuggerIfNeeded(params.tabId);
